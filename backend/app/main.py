@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import stocks
+from app.api.Users import user_routes
+from firebase.firebase_setup import *
 
 app = FastAPI()
 
@@ -13,6 +15,8 @@ app.add_middleware(
 )
 
 app.include_router(stocks.router)
+app.include_router(user_routes.router)
+
 
 @app.get("/api/ping")
 def ping():
