@@ -1,6 +1,8 @@
 import Silk from "../react-bits/Silk";
 import ScrollReveal from "../react-bits/ScrollReveal";
 import { Link } from "react-router-dom";
+import SplitText from "../react-bits/SplitText";
+import logo from "../assets/Traydner_logo.png"
 
 const LandingPage = () => {
   return (
@@ -16,16 +18,27 @@ const LandingPage = () => {
       </div>
 
       <section className="relative z-10 flex flex-col items-center justify-center min-h-screen text-center p-8">
-        <h1 className="text-5xl font-extrabold mb-4">Welcome to Traydner</h1>
+        <div className="flex items-center gap-4">
+          <img src={logo} alt="Logo" className="w-48 h-48"/>
+          <div style={{ fontFamily: 'Georgia' }} className="pt-2">
+            <SplitText
+              text="TRAYDNER"
+              className="text-9xl font-semibold text-center"
+              delay={100}
+              duration={0.6}
+              ease="power3.out"
+              splitType="chars"
+              from={{ opacity: 0, y: 40 }}
+              to={{ opacity: 1, y: 0 }}
+              threshold={0.1}
+              rootMargin="-100px"
+              textAlign="center"
+            />
+          </div>
+        </div>
         <p className="text-xl mb-6 max-w-2xl">
-          Master trading with simulations and AI-powered insights.
+          A trading practice platform that gives users access to simulated Stock, Cryptocurrency, and ForEx exchanges.
         </p>
-      </section>
-
-      <section className="relative z-10 min-h-screen flex items-center justify-center text-center p-8">
-        <ScrollReveal baseOpacity={0} enableBlur baseRotation={0} blurStrength={10}>
-          A trading training platform that gives user access to simulated Stock, Cryptocurrency, and ForEx exchanges.
-        </ScrollReveal>
       </section>
 
       <section className="relative z-10 min-h-screen flex items-center justify-center text-center p-8">
@@ -36,11 +49,8 @@ const LandingPage = () => {
             baseRotation={0}
             blurStrength={5}
           >
-            Get started
+            Coming soon
           </ScrollReveal>{" "}
-          <Link to="/CreateAccount" className="text-blue-400 underline hover:text-blue-600">
-            here
-          </Link>
         </div>
       </section>
 
