@@ -1,6 +1,6 @@
 import Silk from "../react-bits/Silk";
 import ScrollReveal from "../react-bits/ScrollReveal";
-import { Link } from "react-router-dom";
+// import { Link } from "react-router-dom";
 import SplitText from "../react-bits/SplitText";
 import logo from "../assets/Traydner_logo.png"
 
