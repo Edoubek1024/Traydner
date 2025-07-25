@@ -5,3 +5,5 @@
 # 
 
 A website to help users practice trading stocks, cryptocurrencies, etc. Preview [here](https://www.traydner.com/)
+
+The end product will include realtime price reports for each exchange with optional simulated fees to best reflect a real trading environment. There will also be a usable API for users interested in training algorithmic trading systems and backtesting.
