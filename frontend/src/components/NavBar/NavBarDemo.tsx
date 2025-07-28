@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import traydner_title from "../assets/Traydner_title.png"
+import traydner_title from "../../assets/Traydner_title.png"
 
 const NavBarDemo = () => {
   const navigate = useNavigate();

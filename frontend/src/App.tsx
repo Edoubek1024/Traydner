@@ -5,8 +5,8 @@ import LandingPage from "./pages/Landing";
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase/firebaseConfig";
-import NavBar from "./components/NavBar";
-import NavBarDemo from "./components/NavBarDemo";
+import NavBar from "./components/NavBar/NavBar";
+import NavBarDemo from "./components/NavBar/NavBarDemo";
 import NotFound from "./pages/Error/404";
 import Login from "./pages/Auth/Login";
 

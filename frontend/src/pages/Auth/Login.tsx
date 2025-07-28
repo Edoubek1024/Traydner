@@ -3,6 +3,8 @@ import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../../firebase/firebaseConfig";
 import { useNavigate } from "react-router-dom";
 import Beams from "../../react-bits/Beams";
+import { GoogleAuthProvider, signInWithPopup } from "firebase/auth";
+import google_logo from "../../assets/google_logo.png";
 
 const Login = () => {
   const [email, setEmail] = useState("");
@@ -23,6 +25,29 @@ const Login = () => {
       navigate("/Home");
     } catch (err: any) {
       setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    setLoading(true);
+
+    const provider = new GoogleAuthProvider();
+
+    try {
+      const result = await signInWithPopup(auth, provider);
+      console.log("Google Sign-In user:", result.user);
+      setSuccess(true);
+      navigate("/Home");
+    } catch (err: any) {
+      const rawMessage = err.message || "";
+      const cleanedMessage = rawMessage
+        .replace(/^Firebase:\s*/, "")
+        .replace(/\s*\([^\)]*\)\s*$/, "")
+        .trim();
+      setError(cleanedMessage);
     } finally {
       setLoading(false);
     }
@@ -125,6 +150,19 @@ const Login = () => {
               ) : (
                 "Sign In"
               )}
+            </button>
+
+            <button
+              onClick={handleGoogleSignIn}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-3 bg-gray-600 text-gray-200 py-3 px-4 rounded-lg font-semibold text-lg transition-all duration-300 transform hover:scale-105 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 my-4"
+            >
+              <img 
+                src={google_logo}
+                alt="Google logo" 
+                className="w-5 h-5 object-contain" 
+              />
+              Continue with Google
             </button>
 
             {success && (

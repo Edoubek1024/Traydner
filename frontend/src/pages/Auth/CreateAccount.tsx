@@ -4,6 +4,7 @@ import { auth } from "../../firebase/firebaseConfig";
 import { useNavigate } from "react-router-dom";
 import LetterGlitch from "../../react-bits/LetterGlitch";
 import google_logo from "../../assets/google_logo.png"
+import { getIdToken } from "firebase/auth";
 
 const CreateAccount = () => {
   const [email, setEmail] = useState("");
@@ -14,6 +15,28 @@ const CreateAccount = () => {
   const [success, setSuccess] = useState(false);
 
   const navigate = useNavigate();
+
+  async function updateBackendUser(user: any) {
+    const idToken = await user.getIdToken();
+    const payload = {
+      email: user.email,
+      displayName: user.displayName,
+    };
+
+    const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/users/update`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Failed to sync user with backend");
+    }
+  }
 
   const handleSignUp = async () => {
     setError(null);
@@ -26,6 +49,7 @@ const CreateAccount = () => {
     setLoading(true);
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      await updateBackendUser(userCredential.user);
       console.log("User created:", userCredential.user);
       setSuccess(true);
       navigate("/Home");
@@ -47,6 +71,7 @@ const CreateAccount = () => {
 
     try {
       const result = await signInWithPopup(auth, provider);
+      await updateBackendUser(result.user);
       console.log("Google Sign-In user:", result.user);
       setSuccess(true);
       navigate("/Home");

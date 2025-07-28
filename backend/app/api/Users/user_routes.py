@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from middleware.firebase_auth import firebase_user
 from .users import create_or_update_user, get_user
 
@@ -10,5 +10,9 @@ async def get_my_profile(user=Depends(firebase_user)):
 
 @router.post("/update")
 async def update_my_profile(update_data: dict, user=Depends(firebase_user)):
-    create_or_update_user(user['uid'], update_data)
-    return {"message": "User updated"}
+    result = create_or_update_user(user['uid'], update_data)
+
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Unknown error"))
+
+    return { "message": "User updated" }

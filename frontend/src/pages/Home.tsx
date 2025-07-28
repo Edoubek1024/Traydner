@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { fetchStockPrice } from "../api/stocks";
+import { fetchStockPrice, fetchStockHistory, StockHistory } from "../api/stocks";
 import title from "../assets/Traydner_title.png";
+import StockChart from "../components/Charts/StockChart";
 
 export default function Home() {
 
@@ -12,6 +13,7 @@ export default function Home() {
   ]);
 
   const [prices, setPrices] = useState<Record<string, number>>({});
+  const [history, setHistory] = useState<Record<string, StockHistory | null>>({});
 
   useEffect(() =>{
     async function loadPrices() {
@@ -28,19 +30,45 @@ export default function Home() {
       setPrices(results);
     }
 
+    async function loadHistory() {
+      const results: Record<string, StockHistory | null> = {};
+      for (const symbol of symbols) {
+        try {
+          const data = await fetchStockHistory(symbol, "D");
+          results[symbol] = data;
+        } catch (err) {
+          console.error(`Error fetching history for ${symbol}:`, err);
+          results[symbol] = null;
+        }
+      }
+      setHistory(results);
+    }
+
     loadPrices();
+    loadHistory();
   }, [symbols]);
+
+  useEffect(() => {
+    console.log("Updated history:", history);
+  }, [history]);
 
   return (
     <div>
       <div className="p-10 bg-gray-50 min-h-screen">
         <img src={title} alt="Title" className="w-80 h-auto" />
-        <h2 className="text-2xl font-semibold mb-2">Symbols:</h2>
-        <ul className="list-disc list-inside text-lg text-gray-800">
-          {symbols.map((symbol) => (
-            <li key={symbol}>{symbol}: {prices[symbol]}</li>
-          ))}
-        </ul>
+        {symbols.map((symbol) => {
+          const candles = history[symbol]?.history ?? [];
+          const price = prices[symbol];
+
+          return (
+            <StockChart
+              key={symbol}
+              symbol={symbol}
+              price={price}
+              candles={candles}
+            />
+          );
+        })}
       </div>
     </div>
 
