@@ -22,7 +22,7 @@ def create_or_update_user(uid: str, data: dict):
         try:
             users_collection.update_one(
                 { "uid": uid },
-                { "$set": user_model.dict() },
+                { "$set": user_model.model_dump() },
                 upsert=True
             )
         except Exception as mongo_error:
@@ -32,7 +32,7 @@ def create_or_update_user(uid: str, data: dict):
         try:
             db = firestore.client()
             user_ref = db.collection("users").document(uid)
-            user_ref.set(user_model.dict(), merge=True)
+            user_ref.set(user_model.model_dump(), merge=True)
         except Exception as firestore_error:
             logging.warning(f"Firestore update failed for uid {uid}: {firestore_error}")
 

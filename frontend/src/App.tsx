@@ -9,6 +9,7 @@ import NavBar from "./components/NavBar/NavBar";
 import NavBarDemo from "./components/NavBar/NavBarDemo";
 import NotFound from "./pages/Error/404";
 import Login from "./pages/Auth/Login";
+import StockTrade from "./pages/Trade/StockTrade";
 
 function App() {
 
@@ -31,6 +32,8 @@ function App() {
         <Route path="/Home" element={<Home />} />
         <Route path="/CreateAccount" element={<CreateAccount />} />
         <Route path="/Login" element={<Login />} />
+
+        <Route path="/trade/stocks" element={<StockTrade />} />
         
         <Route path="*" element={<NotFound />} />
       </Routes>

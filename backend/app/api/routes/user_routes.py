@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
-from middleware.firebase_auth import firebase_user
-from .users import create_or_update_user, get_user
+from ...firebase.firebase_auth import firebase_user
+from ...services.user_service import create_or_update_user, get_user
 
 router = APIRouter(prefix="/api/users", tags=["Users"])
 

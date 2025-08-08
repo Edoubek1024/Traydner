@@ -23,7 +23,6 @@ ChartJS.register(
   CategoryScale
 );
 
-// Custom crosshair plugin
 const crosshairPlugin: Plugin<"line"> = {
   id: 'crosshair',
   afterDraw: (chart) => {
@@ -37,10 +36,8 @@ const crosshairPlugin: Plugin<"line"> = {
       const leftX = chart.scales.x.left;
       const rightX = chart.scales.x.right;
 
-      // Save current state
       ctx.save();
       
-      // Draw vertical line
       ctx.beginPath();
       ctx.moveTo(x, topY);
       ctx.lineTo(x, bottomY);
@@ -48,7 +45,6 @@ const crosshairPlugin: Plugin<"line"> = {
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
       ctx.stroke();
       
-      // Draw horizontal line
       ctx.beginPath();
       ctx.moveTo(leftX, y);
       ctx.lineTo(rightX, y);
@@ -56,7 +52,6 @@ const crosshairPlugin: Plugin<"line"> = {
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
       ctx.stroke();
       
-      // Restore state
       ctx.restore();
     }
   }
@@ -70,7 +65,15 @@ interface StockChartProps {
 
 export default function StockChart({ symbol, price, candles }: StockChartProps) {
   const data: ChartData<"line"> = {
-    labels: candles.map((c) => new Date(c.timestamp * 1000)),
+    labels: candles.map(c =>
+      new Date(c.timestamp * 1000).toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      }).replace(",", "")
+    ),
     datasets: [
       {
         label: `${symbol} (Close Price)`,
@@ -111,14 +114,7 @@ export default function StockChart({ symbol, price, candles }: StockChartProps) 
         displayColors: false,
         callbacks: {
           title: (context) => {
-            const date = new Date(context[0].parsed.x);
-            return date.toLocaleString('en-US', {
-              month: 'short',
-              day: 'numeric',
-              hour: 'numeric',
-              minute: '2-digit',
-              hour12: true
-            });
+            context[0].label
           },
           label: (context) => {
             return `$${context.parsed.y.toFixed(2)}`;
@@ -128,14 +124,16 @@ export default function StockChart({ symbol, price, candles }: StockChartProps) 
     },
     scales: {
       x: {
-        type: "time",
-        time: {
-          unit: "hour",
-          tooltipFormat: "MMM d, h a",
-        },
+        type: "category",
         title: {
           display: true,
           text: "Time",
+        },
+        ticks: {
+          maxRotation: 45,
+          minRotation: 20,
+          autoSkip: true,
+          maxTicksLimit: 20,
         },
       },
       y: {

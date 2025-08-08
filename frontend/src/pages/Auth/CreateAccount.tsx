@@ -4,7 +4,6 @@ import { auth } from "../../firebase/firebaseConfig";
 import { useNavigate } from "react-router-dom";
 import LetterGlitch from "../../react-bits/LetterGlitch";
 import google_logo from "../../assets/google_logo.png"
-import { getIdToken } from "firebase/auth";
 
 const CreateAccount = () => {
   const [email, setEmail] = useState("");

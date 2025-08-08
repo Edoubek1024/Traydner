@@ -12,3 +12,4 @@ db = client[MONGO_DB_NAME]
 
 users_collection = db["users"]
 trades_collection = db["trades"]
+stock_prices_collection = db["stock_prices"]
