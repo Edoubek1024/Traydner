@@ -22,6 +22,8 @@ async def fetch_prices():
     return results
 
 async def fetch_finnhub_price(symbol: str, client: httpx.AsyncClient, url: str) -> dict:
+  res = None
+  
   try:
     res = await client.get(url)
     res.raise_for_status()

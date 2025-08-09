@@ -7,6 +7,5 @@ STOCK_SYMBOLS = [
   "CVX", "WMT", "MCD", "CSCO", "CRM",
   "ABNB", "SHOP", "UBER", "NKE", "ORCL",
   "AMD", "SOUN", "ZM", "BABA", "PLTR",
-  "SPY", "QQQ", "IWM", "TLT", "ARKK",
   "SOFI", "ROKU", "F", "GM", "LYFT"
 ]

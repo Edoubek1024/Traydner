@@ -2,7 +2,34 @@ import time
 import traceback
 import yfinance as yf
 import asyncio
+from datetime import datetime
+from datetime import time as dt_time
+from pytz import timezone
+import holidays
 from app.db.mongo import stock_prices_collection, users_collection, trades_collection
+
+async def get_user_balance(uid: str) -> dict:
+    user = await asyncio.to_thread(users_collection.find_one, {"uid": uid})
+    if not user:
+        raise ValueError("User not found")
+
+    balance = user.get("balance", {"cash": 0, "stocks": {}})
+    return balance
+
+async def is_market_open() -> dict:
+    eastern = timezone("US/Eastern")
+    us_holidays = holidays.US()
+    now = datetime.now(eastern)
+
+    is_weekday = now.weekday() < 5
+    is_holiday = now.date() in us_holidays
+    is_open_hours = dt_time(9, 30) <= now.time() <= dt_time(16, 0)
+
+    return {
+        "isOpen": is_weekday and not is_holiday and is_open_hours,
+        "time": now.isoformat(),
+    }
+
 
 async def get_current_price(symbol: str) -> dict:
     def fetch():
@@ -38,7 +65,6 @@ async def get_stock_history(symbol: str, resolution: str) -> dict:
             "1wk": ("5y", "1wk"),
             "1mo": ("5y", "1mo"),
         }
-
 
         if resolution not in resolution_map:
             return {"error": f"Unsupported resolution: {resolution}"}

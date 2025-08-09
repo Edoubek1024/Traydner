@@ -128,8 +128,10 @@ export default function StockChart({ symbol, price, candles }: StockChartProps) 
         title: {
           display: true,
           text: "Time",
+          color: "#fff"
         },
         ticks: {
+          color: "#dfdfdf",
           maxRotation: 45,
           minRotation: 20,
           autoSkip: true,
@@ -140,7 +142,11 @@ export default function StockChart({ symbol, price, candles }: StockChartProps) 
         title: {
           display: true,
           text: "Price (USD)",
+          color: "#fff"
         },
+        ticks: {
+          color: "#dfdfdf"
+        }
       },
     },
     onHover: (event, elements) => {
@@ -152,10 +158,10 @@ export default function StockChart({ symbol, price, candles }: StockChartProps) 
 
   return (
     <div className="mb-10">
-      <h3 className="text-xl font-semibold mb-2">
+      <h3 className="text-xl font-semibold mb-2 text-white">
         {symbol}: ${price?.toFixed(2) ?? "N/A"}
       </h3>
-      <div className="bg-white rounded-lg shadow p-4">
+      <div className="bg-gray-700 rounded-lg shadow p-4">
         <Line 
           data={data} 
           options={options} 

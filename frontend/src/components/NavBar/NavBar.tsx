@@ -1,54 +1,115 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ChevronDown, User } from "lucide-react";
+import traydnerTitle from "../../assets/traydner_title.png";
 
-const NavBar = () => {
+const Navbar = () => {
   const navigate = useNavigate();
+  const [isTradeDropdownOpen, setIsTradeDropdownOpen] = useState(false);
 
   return (
-    <nav className="w-full bg-white/80 backdrop-blur-md border-b border-gray-200 sticky top-0 z-50">
+    <nav className="w-full bg-gray-800 border-b border-gray-700 sticky top-0 z-50 shadow-lg">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          {/* Left side - Logo/Brand */}
           <div className="flex items-center space-x-8">
-            <div className="text-2xl font-bold text-gray-900">
-              Traydner
-            </div>
+            <img 
+              src={traydnerTitle} 
+              alt="Traydner Logo" 
+              className="h-10 w-auto cursor-pointer" 
+              onClick={() => navigate('/')} 
+            />
             
-            {/* Navigation Links */}
             <div className="hidden md:flex items-center space-x-6">
-              <button className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors">
+              <button
+                className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors"
+                onClick={() => navigate("/about")}
+              >
                 About
               </button>
-              <button className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors">
+              <button
+                className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors"
+                onClick={() => navigate("/how-it-works")}
+              >
                 How it works
               </button>
-              <button className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors">
+              <button
+                className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors"
+                onClick={() => navigate("/features")}
+              >
                 Features
               </button>
-              <button className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors">
-                Pricing
+              <button
+                className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors"
+                onClick={() => navigate("/balances")}
+              >
+                Balances
               </button>
+              
+              <div className="relative">
+                <button
+                  className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors flex items-center gap-1"
+                  onClick={() => setIsTradeDropdownOpen(!isTradeDropdownOpen)}
+                >
+                  Trade
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+                
+                {isTradeDropdownOpen && (
+                  <div className="absolute top-full left-0 mt-1 w-48 bg-white border border-gray-200 rounded-md shadow-lg z-50">
+                    <button
+                      onClick={() => {
+                        navigate("/trade/stocks");
+                        setIsTradeDropdownOpen(false);
+                      }}
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                    >
+                      Stocks
+                    </button>
+                    <button
+                      onClick={() => {
+                        navigate("/trade/crypto");
+                        setIsTradeDropdownOpen(false);
+                      }}
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                    >
+                      Crypto
+                    </button>
+                    <button
+                      onClick={() => {
+                        navigate("/trade/forex");
+                        setIsTradeDropdownOpen(false);
+                      }}
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                    >
+                      Forex
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Right side - Auth buttons */}
           <div className="flex items-center space-x-4">
-            <button 
-              onClick={() => navigate("/login")}
-              className="px-4 py-2 text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors font-medium"
+            <button
+              onClick={() => navigate("/profile")}
+              className="px-4 py-2 bg-gray-100 text-gray-700 hover:text-gray-900 hover:bg-gray-200 rounded-md transition-colors font-medium flex items-center gap-2"
             >
-              Log in
-            </button>
-            <button 
-              onClick={() => navigate("/create-account")}
-              className="px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white rounded-md transition-colors font-medium"
-            >
-              Create Account
+              <User className="h-4 w-4" />
+              Profile
             </button>
           </div>
         </div>
       </div>
+      
+      {/* Backdrop to close dropdown when clicking outside */}
+      {isTradeDropdownOpen && (
+        <div 
+          className="fixed inset-0 z-40" 
+          onClick={() => setIsTradeDropdownOpen(false)}
+        />
+      )}
     </nav>
   );
 };
 
-export default NavBar;
+export default Navbar;

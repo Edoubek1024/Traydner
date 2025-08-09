@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from app.services.stock_service import stock_trade
 from app.firebase.firebase_auth import firebase_user
 from pydantic import BaseModel
-from app.services.stock_service import get_current_price, get_stock_history
+from app.services.stock_service import get_current_price, get_stock_history, is_market_open, get_user_balance
 from typing import Literal
 
 router = APIRouter(prefix="/api", tags=["Stocks"])
@@ -13,6 +13,10 @@ class TradeRequest(BaseModel):
     action: Literal["buy", "sell"]
     quantity: int
     price: float
+
+@router.get("/market-status")
+async def market_status():
+    return await is_market_open()
 
 @router.get("/price")
 async def price(symbol: str = Query(..., min_length=1)):
@@ -46,7 +50,7 @@ async def get_history(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-@router.post("/trades/order")
+@router.post("/stocks/order")
 async def submit_order(
     trade: TradeRequest,
     user_data=Depends(firebase_user)
@@ -63,5 +67,15 @@ async def submit_order(
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
-
     return result
+
+@router.get("/stocks/balance")
+async def get_stock_balance(user_data=Depends(firebase_user)):
+    try:
+        uid = user_data["uid"]
+        balance = await get_user_balance(uid)
+        return {"balance": balance}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Internal server error")
