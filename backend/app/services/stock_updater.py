@@ -23,7 +23,7 @@ async def fetch_prices():
 
 async def fetch_finnhub_price(symbol: str, client: httpx.AsyncClient, url: str) -> dict:
   res = None
-  
+
   try:
     res = await client.get(url)
     res.raise_for_status()
@@ -62,7 +62,7 @@ def update_prices_to_mongo():
       print(f"❌ Failed to fetch price for {result.get('symbol')}: {result.get('error')}")
 
 
-def run_price_loop(stop_event):
+def run_stock_price_loop(stop_event):
   while not stop_event.is_set():
     update_prices_to_mongo()
     print(f"✅ Updated prices at {time.strftime('%Y-%m-%d %H:%M:%S')}")

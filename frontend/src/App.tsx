@@ -10,6 +10,7 @@ import NavBarDemo from "./components/NavBar/NavBarDemo";
 import NotFound from "./pages/Error/404";
 import Login from "./pages/Auth/Login";
 import StockTrade from "./pages/Trade/StockTrade";
+import CryptoTrade from "./pages/Trade/CryptoTrade";
 
 function App() {
 
@@ -34,6 +35,7 @@ function App() {
         <Route path="/Login" element={<Login />} />
 
         <Route path="/trade/stocks" element={<StockTrade />} />
+        <Route path="/trade/crypto" element={<CryptoTrade />} />
         
         <Route path="*" element={<NotFound />} />
       </Routes>

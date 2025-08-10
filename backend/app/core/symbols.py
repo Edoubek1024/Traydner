@@ -9,3 +9,10 @@ STOCK_SYMBOLS = [
   "AMD", "SOUN", "ZM", "BABA", "PLTR",
   "SOFI", "ROKU", "F", "GM", "LYFT"
 ]
+
+CRYPTO_SYMBOLS = [
+  "BTC", "ETH", "BNB", "SOL", "XRP",
+  "ADA", "DOGE", "AVAX", "TRX", "DOT",
+  "MATIC", "LINK", "LTC", "SHIB", "BCH",
+  "XLM", "UNI", "ATOM", "ETC", "APT"
+]

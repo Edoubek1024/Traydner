@@ -49,8 +49,6 @@ async def get_current_price(symbol: str) -> dict:
             "error": "Price not found in database"
         }
 
-
-
 async def get_stock_history(symbol: str, resolution: str) -> dict:
     try:
         ticker = yf.Ticker(symbol)

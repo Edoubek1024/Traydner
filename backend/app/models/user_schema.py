@@ -6,6 +6,7 @@ class Balance(BaseModel):
     cash: float = 0.0
     stocks: Dict[str, float] = Field(default_factory=dict)
     crypto: Dict[str, float] = Field(default_factory=dict)
+    forex: Dict[str, float] = Field(default_factory=dict)
 
 class UserModel(BaseModel):
     uid: str

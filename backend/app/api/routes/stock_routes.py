@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from app.services.stock_service import get_current_price, get_stock_history, is_market_open, get_user_balance
 from typing import Literal
 
-router = APIRouter(prefix="/api", tags=["Stocks"])
+router = APIRouter(prefix="/api/stocks", tags=["Stocks"])
 
 class TradeRequest(BaseModel):
     symbol: str
@@ -50,7 +50,7 @@ async def get_history(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-@router.post("/stocks/order")
+@router.post("/order")
 async def submit_order(
     trade: TradeRequest,
     user_data=Depends(firebase_user)
@@ -69,7 +69,7 @@ async def submit_order(
         raise HTTPException(status_code=400, detail=result["error"])
     return result
 
-@router.get("/stocks/balance")
+@router.get("/balance")
 async def get_stock_balance(user_data=Depends(firebase_user)):
     try:
         uid = user_data["uid"]

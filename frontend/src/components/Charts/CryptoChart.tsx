@@ -1,3 +1,4 @@
+// components/Charts/CryptoChart.tsx
 import {
   Chart as ChartJS,
   LineElement,
@@ -10,7 +11,15 @@ import {
 } from "chart.js";
 import { Line } from "react-chartjs-2";
 import type { ChartOptions, ChartData, Plugin } from "chart.js";
-import { StockCandle } from "../../api/stocks";
+// If you already have a crypto candle type, import it instead:
+export interface CryptoCandle {
+  timestamp: number; // seconds since epoch
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
 import "chartjs-adapter-date-fns";
 
 ChartJS.register(
@@ -24,7 +33,7 @@ ChartJS.register(
 );
 
 const crosshairPlugin: Plugin<"line"> = {
-  id: 'crosshair',
+  id: "crosshair",
   afterDraw: (chart) => {
     if (chart.tooltip?.active && chart.tooltip.dataPoints?.length) {
       const ctx = chart.ctx;
@@ -37,53 +46,61 @@ const crosshairPlugin: Plugin<"line"> = {
       const rightX = chart.scales.x.right;
 
       ctx.save();
-      
+
       ctx.beginPath();
       ctx.moveTo(x, topY);
       ctx.lineTo(x, bottomY);
       ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
       ctx.stroke();
-      
+
       ctx.beginPath();
       ctx.moveTo(leftX, y);
       ctx.lineTo(rightX, y);
       ctx.lineWidth = 1;
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
       ctx.stroke();
-      
+
       ctx.restore();
     }
-  }
+  },
 };
 
-interface StockChartProps {
+interface CryptoChartProps {
   symbol: string;
   price: number | undefined;
-  candles: StockCandle[];
+  candles: CryptoCandle[];
+  decimals?: number;
 }
 
-export default function StockChart({ symbol, price, candles }: StockChartProps) {
+export default function CryptoChart({
+  symbol,
+  price,
+  candles,
+  decimals = 2,
+}: CryptoChartProps) {
   const data: ChartData<"line"> = {
-    labels: candles.map(c =>
-      new Date(c.timestamp * 1000).toLocaleString("en-US", {
-        month: "short",
-        day: "numeric",
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-      }).replace(",", "")
+    labels: candles.map((c) =>
+      new Date(c.timestamp * 1000)
+        .toLocaleString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: true,
+        })
+        .replace(",", "")
     ),
     datasets: [
       {
         label: `${symbol} (Close Price)`,
         data: candles.map((c) => c.close),
-        borderColor: "#22c55e",
-        backgroundColor: "rgba(34,197,94,0.2)",
+        borderColor: "#e0d700", // "#06b6d4"
+        backgroundColor: "rgba(240, 215, 0, 0.2)", // 6,182,212,0.2
         tension: 0.3,
         pointRadius: 0,
         pointHoverRadius: 4,
-        pointHoverBackgroundColor: "#22c55e",
+        pointHoverBackgroundColor: "#e0d700",
         pointHoverBorderColor: "#ffffff",
         pointHoverBorderWidth: 2,
       },
@@ -94,7 +111,7 @@ export default function StockChart({ symbol, price, candles }: StockChartProps) 
     responsive: true,
     interaction: {
       intersect: false,
-      mode: 'index',
+      mode: "index",
     },
     plugins: {
       legend: {
@@ -102,34 +119,30 @@ export default function StockChart({ symbol, price, candles }: StockChartProps) 
       },
       tooltip: {
         enabled: true,
-        mode: 'index',
+        mode: "index",
         intersect: false,
-        position: 'nearest',
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        titleColor: 'white',
-        bodyColor: 'white',
-        borderColor: '#22c55e',
+        position: "nearest",
+        backgroundColor: "rgba(0, 0, 0, 0.8)",
+        titleColor: "white",
+        bodyColor: "white",
+        borderColor: "#e0d700",
         borderWidth: 1,
         cornerRadius: 6,
         displayColors: false,
         callbacks: {
-          title: (context) => {
-            context[0].label
-          },
-          label: (context) => {
-            return `$${context.parsed.y.toFixed(2)}`;
-          }
-        }
-      }
+          title: (items) => (items?.[0]?.label ?? ""),
+          label: (ctx) =>
+            `$${ctx.parsed.y.toLocaleString(undefined, {
+              minimumFractionDigits: decimals,
+              maximumFractionDigits: decimals,
+            })}`,
+        },
+      },
     },
     scales: {
       x: {
         type: "category",
-        title: {
-          display: true,
-          text: "Time",
-          color: "#fff"
-        },
+        title: { display: true, text: "Time", color: "#fff" },
         ticks: {
           color: "#dfdfdf",
           maxRotation: 45,
@@ -139,36 +152,31 @@ export default function StockChart({ symbol, price, candles }: StockChartProps) 
         },
       },
       y: {
-        title: {
-          display: true,
-          text: "Price (USD)",
-          color: "#fff"
-        },
-        ticks: {
-          color: "#dfdfdf"
-        }
+        title: { display: true, text: "Price (USDT)", color: "#fff" },
+        ticks: { color: "#dfdfdf" },
       },
     },
     onHover: (event, elements) => {
       if (event.native?.target) {
-        (event.native.target as HTMLElement).style.cursor = elements.length > 0 ? 'crosshair' : 'default';
+        (event.native.target as HTMLElement).style.cursor =
+          elements.length > 0 ? "crosshair" : "default";
       }
-    }
+    },
   };
 
   return (
     <div className="mb-10">
       <h3 className="text-xl font-semibold mb-2 text-white">
-        {symbol}: {price != null 
-          ? `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` 
+        {symbol}:{" "}
+        {price != null
+          ? `$${price.toLocaleString(undefined, {
+              minimumFractionDigits: decimals,
+              maximumFractionDigits: decimals,
+            })}`
           : "N/A"}
       </h3>
       <div className="bg-gray-700 rounded-lg shadow p-4">
-        <Line 
-          data={data} 
-          options={options} 
-          plugins={[crosshairPlugin]}
-        />
+        <Line data={data} options={options} plugins={[crosshairPlugin]} />
       </div>
     </div>
   );

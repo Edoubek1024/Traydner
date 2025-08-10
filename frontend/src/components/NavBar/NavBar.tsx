@@ -16,38 +16,38 @@ const Navbar = () => {
               src={traydnerTitle} 
               alt="Traydner Logo" 
               className="h-10 w-auto cursor-pointer" 
-              onClick={() => navigate('/')} 
+              onClick={() => navigate('/home')} 
             />
             
             <div className="hidden md:flex items-center space-x-6">
               <button
-                className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors"
+                className="text-gray-300 hover:text-gray-200 px-3 py-2 text-sm font-medium transition-colors"
                 onClick={() => navigate("/about")}
               >
                 About
               </button>
               <button
-                className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors"
+                className="text-gray-300 hover:text-gray-200 px-3 py-2 text-sm font-medium transition-colors"
                 onClick={() => navigate("/how-it-works")}
               >
                 How it works
               </button>
               <button
-                className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors"
+                className="text-gray-300 hover:text-gray-200 px-3 py-2 text-sm font-medium transition-colors"
                 onClick={() => navigate("/features")}
               >
                 Features
               </button>
               <button
-                className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors"
+                className="text-gray-300 hover:text-gray-200 px-3 py-2 text-sm font-medium transition-colors"
                 onClick={() => navigate("/balances")}
               >
-                Balances
+                Wallet
               </button>
               
               <div className="relative">
                 <button
-                  className="text-gray-700 hover:text-gray-900 px-3 py-2 text-sm font-medium transition-colors flex items-center gap-1"
+                  className="text-gray-300 hover:text-gray-200 px-3 py-2 text-sm font-medium transition-colors flex items-center gap-1"
                   onClick={() => setIsTradeDropdownOpen(!isTradeDropdownOpen)}
                 >
                   Trade
@@ -55,13 +55,13 @@ const Navbar = () => {
                 </button>
                 
                 {isTradeDropdownOpen && (
-                  <div className="absolute top-full left-0 mt-1 w-48 bg-white border border-gray-200 rounded-md shadow-lg z-50">
+                  <div className="absolute top-full left-0 mt-1 w-48 bg-gray-700 border border-gray-500 rounded-md shadow-lg z-50">
                     <button
                       onClick={() => {
                         navigate("/trade/stocks");
                         setIsTradeDropdownOpen(false);
                       }}
-                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-500 hover:text-gray-200 transition-colors"
                     >
                       Stocks
                     </button>
@@ -70,7 +70,7 @@ const Navbar = () => {
                         navigate("/trade/crypto");
                         setIsTradeDropdownOpen(false);
                       }}
-                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-500 hover:text-gray-200 transition-colors"
                     >
                       Crypto
                     </button>
@@ -79,9 +79,9 @@ const Navbar = () => {
                         navigate("/trade/forex");
                         setIsTradeDropdownOpen(false);
                       }}
-                      className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                      className="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-500 hover:text-gray-200 transition-colors"
                     >
-                      Forex
+                      Foreign Exchange
                     </button>
                   </div>
                 )}

@@ -28,21 +28,21 @@ interface BalancesResponse {
 }
 
 export async function fetchMarketStatus(): Promise<boolean> {
-  const res = await fetch(`${BASE_URL}/api/market-status`);
+  const res = await fetch(`${BASE_URL}/api/stocks/market-status`);
   if (!res.ok) throw new Error("Failed to check market status");
   const data = await res.json();
   return data.isOpen;
 }
 
 export async function fetchStockPrice(symbol: string): Promise<number> {
-  const res = await fetch(`${BASE_URL}/api/price?symbol=${symbol}`);
+  const res = await fetch(`${BASE_URL}/api/stocks/price?symbol=${symbol}`);
   if (!res.ok) throw new Error("Failed to fetch stock price");
   const data = await res.json();
   return data.price;
 }
 
 export async function fetchStockHistory(symbol: string, resolution: string): Promise<StockHistory> {
-  const res = await fetch(`${BASE_URL}/api/history?symbol=${symbol}&resolution=${resolution}`);
+  const res = await fetch(`${BASE_URL}/api/stocks/history?symbol=${symbol}&resolution=${resolution}`);
   if (!res.ok) throw new Error(`Failed to fetch history for ${symbol}`);
   const data = await res.json();
   return data;

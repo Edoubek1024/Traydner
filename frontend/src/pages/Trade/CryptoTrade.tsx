@@ -2,36 +2,43 @@ import StockChart from "../../components/Charts/StockChart";
 import { fetchStockPrice, fetchStockHistory, StockHistory, fetchMarketStatus } from "../../api/stocks";
 import { useState, useEffect } from "react";
 import { auth } from "../../firebase/firebaseConfig";
-import { SYMBOLS, getStockDisplayName, Ticker } from "../../config/stocksConfig";
-import { fetchStockBalances, StockBalances } from "../../api/stocks";
+import { CRYPTO_SYMBOLS, getCryptoDisplayName, CryptoTicker } from "../../config/cryptoConfig";
 import { onIdTokenChanged } from "firebase/auth";
+import { CryptoBalances, fetchCryptoBalances, fetchCryptoHistory, fetchCryptoPrice } from "../../api/crypto";
+import CryptoChart from "../../components/Charts/CryptoChart";
 
 
-const StockTrade = () => {
+const CryptoTrade = () => {
 
-  const [symbols] = useState<Ticker[]>(SYMBOLS);
+  const [symbols] = useState<CryptoTicker[]>(CRYPTO_SYMBOLS);
 
-  const [selectedSymbol, setSelectedSymbol] = useState<string>("AAPL");
+  const [selectedSymbol, setSelectedSymbol] = useState<string>("BTC");
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [history, setHistory] = useState<Record<string, StockHistory | null>>({});
-  const [balances, setBalances] = useState<StockBalances | null>(null);
+  const [balances, setBalances] = useState<CryptoBalances | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [tradeAction, setTradeAction] = useState<"buy" | "sell">("buy");
   const [quantity, setQuantity] = useState<number>(0);
-  const [marketOpen, setMarketOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const isOpen = await fetchMarketStatus();
-        setMarketOpen(isOpen);
-      } catch {
-        setMarketOpen(false);
+    const unsub = onIdTokenChanged(auth, async (user) => {
+      if (!user) {
+        setBalances(null);
+        return;
       }
-    })();
+      try {
+        const b = await fetchCryptoBalances();
+        setBalances(b);
+      } catch (e) {
+        console.error("Balance fetch failed:", e);
+        setBalances(null);
+      }
+    });
+
+    return () => unsub();
   }, []);
 
   useEffect(() => {
@@ -39,7 +46,7 @@ const StockTrade = () => {
 
     (async () => {
       try {
-        const p = await fetchStockPrice(selectedSymbol);
+        const p = await fetchCryptoPrice(selectedSymbol);
         if (!cancelled) {
           setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
         }
@@ -56,55 +63,20 @@ const StockTrade = () => {
   }, [selectedSymbol]);
 
   useEffect(() => {
-    let cancelled = false;
-    let intervalId: number | null = null;
-    let inFlight = false;
-
-    const shouldPoll = () =>
-      document.visibilityState === "visible" && marketOpen !== false && !!selectedSymbol;
-
-    const tick = async () => {
-      if (inFlight || !shouldPoll()) return;
-      inFlight = true;
-      try {
-        const p = await fetchStockPrice(selectedSymbol);
-        if (!cancelled) {
-          setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
-        }
-      } catch {
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    tick();
-    intervalId = window.setInterval(tick, 20000);
-
-    const onVis = () => { if (shouldPoll()) tick(); };
-    document.addEventListener("visibilitychange", onVis);
-
-    return () => {
-      cancelled = true;
-      if (intervalId) clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, [selectedSymbol, marketOpen]);
-
-  useEffect(() => {
     let ignore = false;
 
-    async function loadSelectedHistory() {
+    async function loadSelectedCryptoHistory() {
       if (history[selectedSymbol]?.history?.length) return;
 
       setHistoryLoading(true);
       try {
-        const data = await fetchStockHistory(selectedSymbol, "30");
+        const data = await fetchCryptoHistory(selectedSymbol, "30");
         if (!ignore) {
           setHistory(prev => ({ ...prev, [selectedSymbol]: data }));
         }
       } catch (err) {
         if (!ignore) {
-          console.error(`Error fetching history for ${selectedSymbol}:`, err);
+          console.error(`Error fetching crypto history for ${selectedSymbol}:`, err);
           setHistory(prev => ({ ...prev, [selectedSymbol]: null }));
         }
       } finally {
@@ -112,30 +84,23 @@ const StockTrade = () => {
       }
     }
 
-    loadSelectedHistory();
+    loadSelectedCryptoHistory();
     return () => { ignore = true; };
   }, [selectedSymbol]);
 
-  useEffect(() => {
-    const unsub = onIdTokenChanged(auth, async (user) => {
-      if (!user) {
-        setBalances(null);
-        return;
-      }
-      try {
-        const b = await fetchStockBalances();
-        setBalances(b);
-      } catch (e) {
-        console.error("Balance fetch failed:", e);
-        setBalances(null);
-      }
-    });
+  function getQuantityStep(price: number | undefined) {
+    if (!price || price <= 0) return 0.00000001;
 
-    return () => unsub();
-  }, []);
+    if (price > 1000) return 0.00001;
+    if (price > 100) return 0.0001;
+    if (price > 10) return 0.001;
+    if (price > 1) return 0.01;
+    if (price > 0.1) return 0.1;
+    return 1;
+  }
 
-  // const selectedCandles = history[selectedSymbol]?.history ?? [];
   const selectedPrice = prices[selectedSymbol];
+  const qtyStep = getQuantityStep(selectedPrice);
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -150,6 +115,11 @@ const StockTrade = () => {
 
       const idToken = await user.getIdToken();
 
+      const totalCost = selectedPrice * quantity;
+      if (totalCost < 0.01) {
+        throw new Error("Total trade amount must be at least $0.01");
+      }
+
       const payload = {
         symbol: selectedSymbol,
         action: tradeAction,
@@ -157,7 +127,7 @@ const StockTrade = () => {
         price: prices[selectedSymbol],
       };
 
-      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/stocks/order`, {
+      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/crypto/order`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -175,7 +145,7 @@ const StockTrade = () => {
       console.log("✅ Trade submitted:", data);
 
       const actionWord = tradeAction === "buy" ? "bought" : "sold";
-      setError(null); // clear any old error
+      setError(null);
       setSuccessMessage(
         `Successfully ${actionWord} ${quantity} ${selectedSymbol} at $${prices[selectedSymbol].toFixed(2)}`
       );
@@ -196,36 +166,36 @@ const StockTrade = () => {
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">Stock Trading Dashboard</h1>
+          <h1 className="text-4xl font-bold text-white mb-2">Cryptocurrency Trading Dashboard</h1>
         </div>
 
-        {/* Stock Selector */}
+        {/* Crypto Selector */}
         <div className="mb-6">
           <label className="block text-sm font-medium text-white mb-2">
-            Select Stock
+            Select Crypto
           </label>
           <select 
             value={selectedSymbol} 
             onChange={(e) => setSelectedSymbol(e.target.value)}
-            className="w-72 px-3 py-2 border border-emerald-600 rounded-md bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            className="w-72 px-3 py-2 border border-yellow-600 rounded-md bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
           >
             {symbols.map((symbol) => (
               <option key={symbol} value={symbol}>
-                {symbol} - {getStockDisplayName(symbol)}
+                {symbol} - {getCryptoDisplayName(symbol)}
               </option>
             ))}
           </select>
         </div>
 
         {/* Buy/Sell Section */}
-        <div className="mb-6 bg-gray-800 rounded-lg border border-emerald-700 p-6">
+        <div className="mb-6 bg-gray-800 rounded-lg border border-yellow-700 p-6">
           <h2 className="text-xl font-semibold text-white mb-4">
-            Trade {selectedSymbol} - {getStockDisplayName(selectedSymbol)}
+            Trade {selectedSymbol} - {getCryptoDisplayName(selectedSymbol)}
           </h2>
 
           {/* Balances */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-            <div className="bg-gray-700 border border-emerald-600 rounded-md p-3">
+            <div className="bg-gray-700 border border-yellow-600 rounded-md p-3">
               <p className="text-xs text-gray-300">Cash</p>
               <p className="text-lg text-white font-semibold">
                 {balances
@@ -236,15 +206,15 @@ const StockTrade = () => {
                   : "—"}
               </p>
             </div>
-            <div className="bg-gray-700 border border-emerald-600 rounded-md p-3">
+            <div className="bg-gray-700 border border-yellow-600 rounded-md p-3">
               <p className="text-xs text-gray-300">
                 Holdings
               </p>
               <p className="text-lg text-white font-semibold">
-                {balances ? (balances.stocks[selectedSymbol] ?? 0) : "—"}{" "}
-                {balances?.stocks[selectedSymbol] != 1 ? "shares" : "share"} (
+                {balances ? (balances.crypto[selectedSymbol] ?? 0) : "—"}{" "}
+                {balances?.crypto[selectedSymbol] != 1 ? "shares" : "share"} (
                   {balances && prices[selectedSymbol]
-                    ? `$${(((balances.stocks[selectedSymbol] ?? 0) * (prices[selectedSymbol] ?? 0))).toFixed(2)}`
+                    ? `$${(((balances.crypto[selectedSymbol] ?? 0) * (prices[selectedSymbol] ?? 0))).toFixed(2)}`
                     : "—"}
                 )
               </p>
@@ -261,9 +231,13 @@ const StockTrade = () => {
               </label>
               <input
                 type="text"
-                value={selectedPrice ? `$${selectedPrice.toFixed(2)}` : "N/A"}
                 readOnly
-                className="w-full px-3 py-2 border border-emerald-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed"
+                value={
+                  selectedPrice != null
+                    ? selectedPrice
+                    : ""
+                }
+                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
               />
             </div>
 
@@ -275,7 +249,7 @@ const StockTrade = () => {
               <select
                 value={tradeAction}
                 onChange={(e) => setTradeAction(e.target.value as "buy" | "sell")}
-                className="w-full px-3 py-2 border border-emerald-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
               >
                 <option value="buy">Buy</option>
                 <option value="sell">Sell</option>
@@ -285,15 +259,20 @@ const StockTrade = () => {
             {/* Quantity */}
             <div>
               <label className="block text-sm font-medium text-white mb-1">
-                Quantity
+                Quantity ({selectedSymbol})
               </label>
               <input
                 type="number"
+                inputMode="decimal"
+                step={qtyStep}
                 min="0"
-                value={quantity}
-                onChange={(e) => setQuantity(parseInt(e.target.value))}
-                className="w-full px-3 py-2 border border-emerald-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent placeholder-gray-400"
-                placeholder="Shares"
+                value={Number.isNaN(quantity) ? "" : quantity}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setQuantity(val);
+                }}
+                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent placeholder-gray-400"
+                placeholder={`Amount of ${selectedSymbol}`}
               />
             </div>
 
@@ -304,13 +283,13 @@ const StockTrade = () => {
               </label>
               <input
                 type="text"
+                readOnly
                 value={
                   selectedPrice && quantity > 0
-                    ? `$${(selectedPrice * quantity).toFixed(2)}`
+                    ? (selectedPrice * quantity).toLocaleString(undefined, { maximumFractionDigits: 8 })
                     : "N/A"
                 }
-                readOnly
-                className="w-full px-3 py-2 border border-emerald-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed"
+                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
               />
             </div>
 
@@ -318,14 +297,9 @@ const StockTrade = () => {
             <div>
               <button
                 type="submit"
-                disabled={marketOpen === false}
-                className={`w-full font-medium py-2 px-4 rounded-md transition ${
-                  marketOpen === false
-                    ? "bg-gray-600 text-gray-400 cursor-not-allowed"
-                    : "bg-green-600 text-white hover:bg-green-700"
-                }`}
+                className={"w-full font-medium py-2 px-4 rounded-md transition bg-yellow-600 text-white hover:bg-yellow-700"}
               >
-                {marketOpen === false ? "Market Closed" : "Submit Order"}
+                Submit Order
               </button>
             </div>
 
@@ -335,7 +309,7 @@ const StockTrade = () => {
               </div>
             )}
             {successMessage && (
-              <div className="md:col-span-5 text-green-400 bg-green-900 border border-green-700 rounded-md p-3 mb-2">
+              <div className="md:col-span-5 text-green-500 bg-green-900 border border-green-700 rounded-md p-3 mb-2">
                 {successMessage}
               </div>
             )}
@@ -343,24 +317,24 @@ const StockTrade = () => {
         </div>
 
         {/* Main Chart */}
-        <div className="bg-gray-800 rounded-lg border border-emerald-700 p-6">
+        <div className="bg-gray-800 rounded-lg border border-yellow-700 p-6">
           {loading ? (
             <div className="flex items-center justify-center h-96">
               <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500 mx-auto mb-4"></div>
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mx-auto mb-4"></div>
                 <p className="text-gray-400">Loading prices...</p>
               </div>
             </div>
           ) : historyLoading ? (
             <div className="flex items-center justify-center h-96">
               <div className="text-center">
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-green-500 mx-auto mb-3"></div>
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-yellow-500 mx-auto mb-3"></div>
                 <p className="text-gray-400">Loading {selectedSymbol} history...</p>
               </div>
             </div>
           ) : (
             <div className="-mb-8">
-              <StockChart
+              <CryptoChart
                 symbol={selectedSymbol}
                 price={prices[selectedSymbol]}
                 candles={history[selectedSymbol]?.history ?? []}
@@ -373,4 +347,4 @@ const StockTrade = () => {
   );
 };
 
-export default StockTrade;
+export default CryptoTrade;
