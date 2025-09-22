@@ -68,7 +68,7 @@ async def get_stock_history(
             "30m":("60d", "30m"),
             "60m":("730d","60m"),
             "1d": (None,  "1d"),
-            "1wk":("5y",  "1wk"),
+            "1wk":(None,  "1wk"),
             "1mo":(None,  "1mo"),
         }
         if resolution not in res_map:
