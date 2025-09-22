@@ -1,7 +1,6 @@
 import asyncio
 import time
 import httpx
-import os
 
 from app.db.mongo import stock_prices_collection
 from app.core.symbols import STOCK_SYMBOLS

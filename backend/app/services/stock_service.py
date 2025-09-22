@@ -1,6 +1,5 @@
 import time
 import traceback
-import yfinance as yf
 import asyncio
 from datetime import datetime
 from datetime import time as dt_time
@@ -58,6 +57,7 @@ async def get_stock_history(
     limit: int = 500,
 ) -> dict:
     try:
+        import yfinance as yf
         ticker = yf.Ticker(symbol)
 
         # Yahoo-friendly mapping

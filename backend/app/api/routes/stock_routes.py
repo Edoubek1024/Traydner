@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Query, HTTPException, Depends
-from fastapi.security import OAuth2PasswordBearer
 from app.services.stock_service import stock_trade
 from app.firebase.firebase_auth import firebase_user
 from pydantic import BaseModel
@@ -24,7 +23,7 @@ async def price(symbol: str = Query(..., min_length=1)):
 
 @router.get("/history")
 async def get_history(
-    symbol: str = Query(..., description="Stock symbol, e.g. AAPL, TSLA"),  # fixed ...
+    symbol: str = Query(..., description="Stock symbol, e.g. AAPL, TSLA"),
     resolution: str = Query("D", description="Resolution: 1, 5, 15, 30, 60, D, W, M"),
     start: Optional[int] = Query(None, description="unix seconds"),
     end:   Optional[int] = Query(None, description="unix seconds"),

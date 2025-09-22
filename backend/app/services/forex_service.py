@@ -13,7 +13,6 @@ from contextlib import contextmanager, redirect_stderr
 from app.db.mongo import forex_prices_collection, users_collection, trades_collection
 import asyncio
 import traceback
-import yfinance as yf
 from datetime import datetime, time as dt_time, timezone as dt_tz
 from pytz import timezone
 
@@ -193,6 +192,7 @@ async def get_forex_history(
     limit: int = 500,
 ) -> dict:
     try:
+        import yfinance as yf
         base = base.strip().upper()
         if len(base) != 3:
             return {"error": f"Invalid base currency: {base}"}

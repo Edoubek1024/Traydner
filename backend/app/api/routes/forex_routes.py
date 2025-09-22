@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Query, HTTPException, Depends
-from typing import Optional, List, Dict, Any
-from app.db.mongo import forex_prices_collection
+from typing import Optional
 from app.services.forex_service import get_current_forex_price, get_forex_history, get_user_forex_balance, forex_trade, get_forex_market_status
 from typing import Literal
 from pydantic import BaseModel
