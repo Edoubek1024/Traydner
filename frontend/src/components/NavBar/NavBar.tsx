@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronDown, User } from "lucide-react";
-import traydnerTitle from "../../assets/traydner_title.png";
+import traydnerTitle from "../../assets/Traydner_title.png";
 
 const Navbar = ({ overlay = false }) => {
   const navigate = useNavigate();
@@ -30,7 +30,7 @@ const Navbar = ({ overlay = false }) => {
               >
                 How it works
               </button>
-              
+
               <button
                 className="text-gray-300 hover:text-gray-200 px-3 py-2 text-sm font-medium transition-colors"
                 onClick={() => navigate("/wallet")}
