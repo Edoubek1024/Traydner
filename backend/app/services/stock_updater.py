@@ -18,7 +18,7 @@ async def fetch_prices():
       url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={api_key}"
       result = await fetch_finnhub_price(symbol, client, url)
       results.append(result)
-      await asyncio.sleep(0.3)
+      await asyncio.sleep(0.35)
     return results
 
 async def fetch_finnhub_price(symbol: str, client: httpx.AsyncClient, url: str) -> dict:
@@ -53,6 +53,7 @@ def update_prices_to_mongo():
         {
           "$set": {
             "price": result["price"],
+            "source": "finnhub",
             "updatedAt": time.time()
           }
         },
@@ -65,4 +66,4 @@ def update_prices_to_mongo():
 def run_stock_price_loop(stop_event):
   while not stop_event.is_set():
     update_prices_to_mongo()
-    print(f"✅ Updated prices at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"✅ Updated stock prices at {time.strftime('%Y-%m-%d %H:%M:%S')}")

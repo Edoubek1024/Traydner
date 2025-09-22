@@ -3,6 +3,8 @@ import time
 import traceback
 import httpx
 from app.db.mongo import crypto_prices_collection, users_collection, trades_collection
+from decimal import Decimal, ROUND_HALF_UP, getcontext
+getcontext().prec = 28
 
 CRYPTO_RES_MAP = {
     "1": "1m",
@@ -16,6 +18,8 @@ CRYPTO_RES_MAP = {
     "W": "1w",
     "M": "1M",
 }
+USD = Decimal("0.01")
+CRYPTO = Decimal("0.00000001")
 
 BINANCE_KLINES = "https://api.binance.us/api/v3/klines"
 
@@ -40,7 +44,7 @@ async def get_crypto_history(symbol: str, resolution: str, start_ts: int | None 
         return {"error": f"Unsupported resolution: {resolution}"}
 
     params = {
-        "symbol": f"{symbol.upper()}USDT",
+        "symbol": f"{symbol.upper()}USD",
         "interval": interval,
         "limit": min(max(limit, 1), 1000),
     }
@@ -79,8 +83,11 @@ async def crypto_trade(symbol: str, action: str, quantity: float, price: float, 
             return {"error": "Invalid trade action. Must be 'buy' or 'sell'."}
         if quantity <= 0 or price <= 0:
             return {"error": "Quantity and price must be greater than zero."}
-        
-        total_cost = quantity * price
+
+        # Convert via str to avoid inheriting binary float error
+        q = Decimal(str(quantity)).quantize(CRYPTO, rounding=ROUND_HALF_UP)
+        p = Decimal(str(price))  # keep full precision for price
+        total = (q * p).quantize(USD, rounding=ROUND_HALF_UP)
 
         user = await asyncio.to_thread(users_collection.find_one, {"uid": user_id})
         if not user:
@@ -89,23 +96,27 @@ async def crypto_trade(symbol: str, action: str, quantity: float, price: float, 
         balance = user.get("balance", {"cash": 0, "crypto": {}})
         balance.setdefault("crypto", {})
 
+        cash = Decimal(str(balance.get("cash", 0))).quantize(USD, rounding=ROUND_HALF_UP)
+        cur_q = Decimal(str(balance["crypto"].get(symbol, 0))).quantize(CRYPTO, rounding=ROUND_HALF_UP)
+
         if action == "buy":
-            if balance["cash"] < total_cost:
+            if cash < total:
                 return {"error": "Insufficient cash balance."}
+            cash = (cash - total).quantize(USD, rounding=ROUND_HALF_UP)
+            cur_q = (cur_q + q).quantize(CRYPTO, rounding=ROUND_HALF_UP)
 
-            balance["cash"] -= total_cost
-            balance["crypto"][symbol] = balance["crypto"].get(symbol, 0.0) + quantity
-
-        elif action == "sell":
-            current_quantity = balance["crypto"].get(symbol, 0.0)
-            if current_quantity < quantity:
+        else:  # sell
+            if cur_q < q:
                 return {"error": f"Insufficient {symbol} to sell."}
+            cur_q = (cur_q - q).quantize(CRYPTO, rounding=ROUND_HALF_UP)
+            cash = (cash + total).quantize(USD, rounding=ROUND_HALF_UP)
 
-            balance["crypto"][symbol] = current_quantity - quantity
-            balance["cash"] += total_cost
-
-            if balance["crypto"][symbol] == 0:
-                del balance["crypto"][symbol]
+        # write back as plain numbers (or switch to Mongo Decimal128 if you prefer)
+        balance["cash"] = float(cash)
+        if cur_q == 0:
+            balance["crypto"].pop(symbol, None)
+        else:
+            balance["crypto"][symbol] = float(cur_q)
 
         await asyncio.to_thread(
             users_collection.update_one,
@@ -117,9 +128,9 @@ async def crypto_trade(symbol: str, action: str, quantity: float, price: float, 
             "userId": user_id,
             "symbol": symbol.upper(),
             "action": action,
-            "quantity": quantity,
-            "price": price,
-            "total": total_cost,
+            "quantity": float(q),
+            "price": float(p),
+            "total": float(total),
             "timestamp": time.time(),
             "type": "crypto"
         }

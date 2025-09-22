@@ -1,13 +1,12 @@
 import Silk from "../react-bits/Silk";
-import ScrollReveal from "../react-bits/ScrollReveal";
-// import { Link } from "react-router-dom";
+import { Link } from "react-router-dom"; // ✅ make sure this is imported
 import SplitText from "../react-bits/SplitText";
-import logo from "../assets/Traydner_logo.png"
+import logo from "../assets/Traydner_logo.png";
 
 const LandingPage = () => {
   return (
     <div className="relative w-full min-h-screen overflow-hidden text-white">
-      <div className="absolute inset-0 w-full h-full z-0">
+      <div className="absolute inset-0 w-full h-full z-0 pointer-events-none">
         <Silk
           speed={5}
           scale={1.5}
@@ -19,8 +18,8 @@ const LandingPage = () => {
 
       <section className="relative z-10 flex flex-col items-center justify-center min-h-screen text-center p-8">
         <div className="flex items-center gap-4">
-          <img src={logo} alt="Logo" className="w-48 h-48"/>
-          <div style={{ fontFamily: 'Georgia' }} className="pt-2">
+          <img src={logo} alt="Logo" className="w-48 h-48" />
+          <div style={{ fontFamily: "Georgia" }} className="pt-2">
             <SplitText
               text="TRAYDNER"
               className="text-9xl font-semibold text-center"
@@ -41,16 +40,21 @@ const LandingPage = () => {
         </p>
       </section>
 
-      <section className="relative z-10 min-h-screen flex items-center justify-center text-center p-8">
-        <div className="text-5xl font-bold">
-          <ScrollReveal
-            baseOpacity={0.2}
-            enableBlur={false}
-            baseRotation={0}
-            blurStrength={5}
+      {/* CTA Section */}
+      <section className="relative z-10 min-h-[60vh] flex flex-col items-center justify-center text-center p-8">
+        <div className="max-w-xl">
+          <p className="text-2xl md:text-3xl font-semibold mb-6">
+            Ready to learn by <i>doing</i>... risk-free?
+          </p>
+
+          {/* Keep the button outside ScrollReveal so it always renders */}
+          <Link
+            to="/createaccount"
+            aria-label="Create your Traydner account"
+            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-green-600 to-lime-700 px-6 py-3 text-white font-semibold shadow hover:shadow-lg hover:brightness-110 transition"
           >
-            Coming soon
-          </ScrollReveal>{" "}
+            Get started →
+          </Link>
         </div>
       </section>
 

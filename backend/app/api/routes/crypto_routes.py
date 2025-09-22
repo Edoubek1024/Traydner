@@ -5,7 +5,6 @@ import httpx
 from app.services.crypto_service import get_user_crypto_balance, get_crypto_price_db, crypto_trade, get_crypto_history
 
 from app.firebase.firebase_auth import firebase_user
-# from app.services.crypto_service import ()
 
 router = APIRouter(prefix="/api/crypto", tags=["Crypto"])
 

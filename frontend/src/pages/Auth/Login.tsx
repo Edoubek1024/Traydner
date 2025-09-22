@@ -22,7 +22,7 @@ const Login = () => {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       console.log("User logged in:", userCredential.user);
       setSuccess(true);
-      navigate("/Home");
+      navigate("/home");
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -40,7 +40,7 @@ const Login = () => {
       const result = await signInWithPopup(auth, provider);
       console.log("Google Sign-In user:", result.user);
       setSuccess(true);
-      navigate("/Home");
+      navigate("/home");
     } catch (err: any) {
       const rawMessage = err.message || "";
       const cleanedMessage = rawMessage

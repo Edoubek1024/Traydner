@@ -1,41 +1,54 @@
 import { useState, useEffect } from "react";
+import { fetchForexPrice, ForexHistory, fetchForexHistory, fetchForexBalances, ForexBalances, fetchMarketStatus } from "../../api/forex";
+import { FOREX_SYMBOLS, ForexTicker, getForexDisplayName } from "../../config/forexConfig";
 import { auth } from "../../firebase/firebaseConfig";
-import { CRYPTO_SYMBOLS, getCryptoDisplayName, CryptoTicker } from "../../config/cryptoConfig";
 import { onIdTokenChanged } from "firebase/auth";
-import { CryptoBalances, CryptoHistory, fetchCryptoBalances, fetchCryptoHistory, fetchCryptoPrice } from "../../api/crypto";
 import HistoryChart from "../../components/Charts/HistoryChart";
-import ConfirmTradeModal from "../../components/Modals/ConfirmTradeModal"
+import ConfirmTradeModal from "../../components/Modals/ConfirmTradeModal";
 
 type RangeKey = "1D" | "1W" | "1M" | "3M" | "YTD" | "1Y" | "5Y";
 
-const RANGE_META: Record<RangeKey, { res: string; slice?: number | null }> = {
-  "1D": { res: "5", slice: 288 },
-  "1W": { res: "15", slice: 672 },
-  "1M": { res: "60", slice: 720 },
-  "3M": { res: "240", slice: 540 },
-  "YTD": { res: "D", slice: 365 },
-  "1Y": { res: "D", slice: 365 },
-  "5Y": { res: "W", slice: 260 },
+const RANGE_META: Record<RangeKey, { res: string }> = {
+  "1D": { res: "1" },   // backend maps "1" -> 1m
+  "1W": { res: "15" },  // backend maps "15" -> 15m
+  "1M": { res: "60" },  // backend maps "60" -> 60m
+  "3M": { res: "240" },
+  "YTD": { res: "DY" }, // backend maps "DY" -> 1d_ytd
+  "1Y": { res: "D" },   // backend maps "D" -> 1d
+  "5Y": { res: "W" },   // backend maps "W" -> 1wk
 };
 
-const CryptoTrade = () => {
+const ForexTrade = () => {
 
-  const [symbols] = useState<CryptoTicker[]>(CRYPTO_SYMBOLS);
+  const [symbols] = useState<ForexTicker[]>(FOREX_SYMBOLS);
 
-  const [selectedSymbol, setSelectedSymbol] = useState<string>("BTC");
+  const [selectedSymbol, setSelectedSymbol] = useState<string>("EUR");
   const [prices, setPrices] = useState<Record<string, number>>({});
-  const [history, setHistory] = useState<Record<string, CryptoHistory | null>>({});
-  const [balances, setBalances] = useState<CryptoBalances | null>(null);
+  const [history, setHistory] = useState<Record<string, ForexHistory | null>>({});
+  const [balances, setBalances] = useState<ForexBalances | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [tradeAction, setTradeAction] = useState<"buy" | "sell">("buy");
   const [quantity, setQuantity] = useState<number>(0);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [marketOpen, setMarketOpen] = useState(false);
   const [range, setRange] = useState<RangeKey>("1D");
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const isOpen = await fetchMarketStatus();
+        setMarketOpen(isOpen);
+      } catch (err) {
+        console.error("Failed to fetch forex market status:", err);
+        setMarketOpen(false);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     const unsub = onIdTokenChanged(auth, async (user) => {
@@ -44,7 +57,7 @@ const CryptoTrade = () => {
         return;
       }
       try {
-        const b = await fetchCryptoBalances();
+        const b = await fetchForexBalances();
         setBalances(b);
       } catch (e) {
         console.error("Balance fetch failed:", e);
@@ -60,7 +73,7 @@ const CryptoTrade = () => {
 
     (async () => {
       try {
-        const p = await fetchCryptoPrice(selectedSymbol);
+        const p = await fetchForexPrice(selectedSymbol);
         if (!cancelled) {
           setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
         }
@@ -76,99 +89,79 @@ const CryptoTrade = () => {
     return () => { cancelled = true; };
   }, [selectedSymbol]);
 
-  async function fetchCandlesInChunks(
-    symbol: string,
-    res: string,
-    start: number,
-    end: number,
-    needed: number
-  ): Promise<any[]> {
-    let all: any[] = [];
-    let cursorEnd: number | undefined = end;
+  useEffect(() => {
+  let ignore = false;
+  const cacheKey = `${selectedSymbol}|${range}`;
 
-    while (all.length < needed) {
-      const remaining = needed - all.length;
+  async function loadSelectedHistory() {
+    if (history[cacheKey]?.history?.length) return;
 
-      const batch = await fetchCryptoHistory(symbol, res, {
-        end: cursorEnd,
-        limit: Math.min(remaining, 1000),
-      });
+    setHistoryLoading(true);
+    try {
+      const { res } = RANGE_META[range];
+      const data = await fetchForexHistory(selectedSymbol, res);
 
-      const candles = batch.history ?? [];
-      if (!candles.length) break;
+      let candles = data.history ?? [];
 
-      all = [...candles, ...all];
+      const toSec = (t: number) => (t > 1e12 ? Math.floor(t / 1000) : t);
 
-      cursorEnd = candles[0].timestamp - 60;
+      if (range === "1D") {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const cutoff = nowSec - 24 * 60 * 60; // last 24h
+        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
+      }
+      if (range === "1W") {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const cutoff = nowSec - 7 * 24 * 60 * 60; // last 7 days
+        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
+      }
+      if (range === "1M") {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const cutoff = nowSec - 30 * 24 * 60 * 60; // last 30 days
+        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
+      }
+      if (range === "3M") {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const cutoff = nowSec - 90 * 24 * 60 * 60; // last 90 days
+        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
+      }
+      if (range === "YTD") {
+        const now = new Date();
+        const jan1UtcSec = Math.floor(Date.UTC(now.getUTCFullYear(), 0, 1, 0, 0, 0) / 1000);
+        candles = candles.filter(c => toSec(c.timestamp) >= jan1UtcSec);
+      }
+      if (range === "1Y") {
+        const now = new Date();
+        const cutoff = Math.floor(
+          Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0) / 1000
+        );
+        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
+      }
+      if (range === "5Y") {
+        const now = new Date();
+        const cutoff = Math.floor(
+          Date.UTC(now.getUTCFullYear() - 5, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0) / 1000
+        );
+        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
+      }
 
-      if (cursorEnd <= start) break;
+      const trimmed: ForexHistory = { ...data, history: candles };
+
+      if (!ignore) setHistory(prev => ({ ...prev, [cacheKey]: trimmed }));
+    } catch (err) {
+      if (!ignore) {
+        console.error(`Error fetching history for ${selectedSymbol} (${range}):`, err);
+        setHistory(prev => ({ ...prev, [cacheKey]: null }));
+      }
+    } finally {
+      if (!ignore) setHistoryLoading(false);
     }
-
-    all = all.filter(c => c.timestamp >= start);
-
-    return all.slice(-needed);
   }
 
-  useEffect(() => {
-    let ignore = false;
-    const cacheKey = `${selectedSymbol}|${range}`;
+  loadSelectedHistory();
+  return () => { ignore = true; };
+}, [selectedSymbol, range]);
 
-    async function loadSelectedCryptoHistory() {
-      if (history[cacheKey]?.history?.length) return;
-      setHistoryLoading(true);
-      try {
-        const { res, slice: sliceCount } = RANGE_META[range];
-        let candles: any[] = [];
-
-        const now = Math.floor(Date.now() / 1000);
-
-        if (range === "1D") {
-          const now = Math.floor(Date.now() / 1000);
-          const oneDayAgo = now - 24 * 60 * 60;
-          candles = await fetchCandlesInChunks(selectedSymbol, res, oneDayAgo, now, 1440);
-        } else if (range === "1W") {
-          const oneWeekAgo = now - 7 * 24 * 60 * 60;
-          candles = await fetchCandlesInChunks(selectedSymbol, res, oneWeekAgo, now, sliceCount ?? 390);
-        } else if (range === "1M") {
-          const oneMonthAgo = now - 30 * 24 * 60 * 60;
-          candles = await fetchCandlesInChunks(selectedSymbol, res, oneMonthAgo, now, sliceCount ?? 1000);
-        } else if (range === "3M") {
-          const threeMonthsAgo = now - 90 * 24 * 60 * 60;
-          candles = await fetchCandlesInChunks(selectedSymbol, res, threeMonthsAgo, now, sliceCount ?? 1000);
-        } else if (range === "YTD") {
-          const jan1 = Math.floor(Date.UTC(new Date().getUTCFullYear(), 0, 1) / 1000);
-          candles = await fetchCandlesInChunks(selectedSymbol, res, jan1, now, sliceCount ?? 1000);
-        } else if (range === "1Y") {
-          const oneYearAgo = now - 365 * 24 * 60 * 60;
-          candles = await fetchCandlesInChunks(selectedSymbol, res, oneYearAgo, now, sliceCount ?? 1000);
-        } else if (range === "5Y") {
-          const fiveYearsAgo = now - 5 * 365 * 24 * 60 * 60;
-          candles = await fetchCandlesInChunks(selectedSymbol, res, fiveYearsAgo, now, sliceCount ?? 260);
-        }
-
-        if (sliceCount && candles.length > sliceCount) {
-          candles = candles.slice(-sliceCount);
-        }
-
-        if (!ignore) {
-          setHistory(prev => ({
-            ...prev,
-            [cacheKey]: { symbol: selectedSymbol, resolution: res, history: candles },
-          }));
-        }
-      } catch (err) {
-        if (!ignore) {
-          console.error(`Error fetching crypto history for ${selectedSymbol} (${range}):`, err);
-          setHistory(prev => ({ ...prev, [cacheKey]: null }));
-        }
-      } finally {
-        if (!ignore) setHistoryLoading(false);
-      }
-    }
-
-    loadSelectedCryptoHistory();
-    return () => { ignore = true; };
-  }, [selectedSymbol, range]);
 
   function scheduleEveryMinute(callback: () => void) {
     const now = new Date();
@@ -183,60 +176,9 @@ const CryptoTrade = () => {
     return () => clearTimeout(timeout);
   }
 
-  useEffect(() => {
-    let cleanup: (() => void) | null = null;
-
-    async function refresh() {
-      try {
-        const p = await fetchCryptoPrice(selectedSymbol);
-        setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
-
-        const cacheKey = `${selectedSymbol}|${range}`;
-        const { res, slice: sliceCount } = RANGE_META[range];
-        const now = Math.floor(Date.now() / 1000);
-
-        let candles: any[] = [];
-        if (range === "1D") {
-          const oneDayAgo = now - 24 * 60 * 60;
-          candles = await fetchCandlesInChunks(selectedSymbol, res, oneDayAgo, now, 1440);
-        }
-
-        if (sliceCount && candles.length > sliceCount) {
-          candles = candles.slice(-sliceCount);
-        }
-
-        setHistory(prev => ({
-          ...prev,
-          [cacheKey]: { symbol: selectedSymbol, resolution: res, history: candles },
-        }));
-      } catch (err) {
-        console.error("Minute refresh failed:", err);
-      }
-    }
-
-    cleanup = scheduleEveryMinute(refresh);
-
-    refresh();
-
-    return () => {
-      if (cleanup) cleanup();
-    };
-  }, [selectedSymbol, range]);
-
-  function getQuantityStep(price: number | undefined) {
-    if (!price || price <= 0) return 0.00000001;
-
-    if (price > 1000) return 0.00001;
-    if (price > 100) return 0.0001;
-    if (price > 10) return 0.001;
-    if (price > 1) return 0.01;
-    if (price > 0.1) return 0.1;
-    return 1;
-  }
-
   async function refreshBalances() {
     try {
-      const b = await fetchCryptoBalances();
+      const b = await fetchForexBalances();
       setBalances(b);
     } catch (e) {
       console.error("Refresh balances failed:", e);
@@ -248,6 +190,7 @@ const CryptoTrade = () => {
     try {
       const user = auth.currentUser;
       if (!user) throw new Error("You must be logged in to place a trade.");
+      if (marketOpen === false) throw new Error("Market is closed.");
 
       const idToken = await user.getIdToken();
 
@@ -262,7 +205,7 @@ const CryptoTrade = () => {
 
       const payload = { symbol: selectedSymbol, action: tradeAction, quantity, price };
 
-      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/crypto/order`, {
+      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/forex/order`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
         body: JSON.stringify(payload),
@@ -272,7 +215,6 @@ const CryptoTrade = () => {
         const data = await res.json().catch(() => ({}));
         throw new Error(data?.error || data?.detail || "Trade request failed");
       }
-
       await res.json();
 
       await refreshBalances();
@@ -294,40 +236,54 @@ const CryptoTrade = () => {
   }
 
   const selectedPrice = prices[selectedSymbol];
-  const qtyStep = getQuantityStep(selectedPrice);
-
-  const fmtQty = (n: number) =>
-    n.toLocaleString(undefined, { maximumFractionDigits: 8 });
-  const fmtUsd = (n: number) =>
-    n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const holdingQty =
-    balances ? (balances.crypto[selectedSymbol] ?? 0) : 0;
-  const holdingVal =
-    holdingQty && selectedPrice ? holdingQty * selectedPrice : 0;
+  const cacheKey = `${selectedSymbol}|${range}`;
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
 
     const price = prices[selectedSymbol];
+    if (!Number.isFinite(price)) { setError("Price unavailable."); return; }
+    if (!quantity || quantity <= 0 || Number.isNaN(quantity)) { setError("Enter a valid quantity."); return; }
+    if (price * quantity < 0.01) { setError("Total trade amount must be at least $0.01"); return; }
+    if (marketOpen === false) { setError("Market is closed."); return; }
 
-    if (!Number.isFinite(price)) {
-      setError("Price unavailable.");
-      return;
-    }
-    if (!quantity || quantity <= 0 || Number.isNaN(quantity)) {
-      setError("Enter a valid quantity.");
-      return;
-    }
-    if (price * quantity < 0.01) {
-      setError("Total trade amount must be at least $0.01");
-      return;
-    }
-
-    // Open the confirm modal
     setConfirmOpen(true);
   };
+
+  useEffect(() => {
+    let cleanup: (() => void) | null = null;
+
+    async function refresh() {
+      try {
+        const isOpen = await fetchMarketStatus();
+        setMarketOpen(isOpen);
+
+        const p = await fetchForexPrice(selectedSymbol);
+        setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
+
+        const cacheKey = `${selectedSymbol}|${range}`;
+        const { res } = RANGE_META[range];
+
+        if (range === "1D") {
+          const data = await fetchForexHistory(selectedSymbol, res);
+          setHistory(prev => ({
+            ...prev,
+            [cacheKey]: { ...data, history: data.history ?? [] },
+          }));
+        }
+      } catch (err) {
+        console.error("Minute refresh failed:", err);
+      }
+    }
+
+    cleanup = scheduleEveryMinute(refresh);
+    refresh();
+
+    return () => {
+      if (cleanup) cleanup();
+    };
+  }, [selectedSymbol, range]);
 
   const RangeButton = ({ value, label }: { value: RangeKey; label: string }) => (
     <button
@@ -335,8 +291,8 @@ const CryptoTrade = () => {
       onClick={() => setRange(value)}
       className={`px-3 py-1 rounded-md border transition ${
         range === value
-          ? "bg-yellow-600 text-white border-yellow-500"
-          : "bg-gray-700 text-gray-200 border-yellow-700 hover:bg-gray-600"
+          ? "bg-indigo-600 text-white border-indigo-500"
+          : "bg-gray-700 text-gray-200 border-indigo-700 hover:bg-gray-600"
       }`}
     >
       {label}
@@ -348,36 +304,36 @@ const CryptoTrade = () => {
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">Cryptocurrency Trading Dashboard</h1>
+          <h1 className="text-4xl font-bold text-white mb-2">Foreign Exchange Trading Dashboard</h1>
         </div>
 
-        {/* Crypto Selector */}
+        {/* Forex Selector */}
         <div className="mb-6">
           <label className="block text-sm font-medium text-white mb-2">
-            Select Crypto
+            Select Forex Symbol
           </label>
           <select 
             value={selectedSymbol} 
             onChange={(e) => setSelectedSymbol(e.target.value)}
-            className="w-72 px-3 py-2 border border-yellow-600 rounded-md bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+            className="w-72 px-3 py-2 border border-indigo-600 rounded-md bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
           >
             {symbols.map((symbol) => (
               <option key={symbol} value={symbol}>
-                {symbol} - {getCryptoDisplayName(symbol)}
+                {symbol} - {getForexDisplayName(symbol)}
               </option>
             ))}
           </select>
         </div>
 
         {/* Buy/Sell Section */}
-        <div className="mb-6 bg-gray-800 rounded-lg border border-yellow-700 p-6">
+        <div className="mb-6 bg-gray-800 rounded-lg border border-indigo-700 p-6">
           <h2 className="text-xl font-semibold text-white mb-4">
-            Trade {selectedSymbol} - {getCryptoDisplayName(selectedSymbol)}
+            Trade {selectedSymbol} - {getForexDisplayName(selectedSymbol)}
           </h2>
 
           {/* Balances */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-            <div className="bg-gray-700 border border-yellow-600 rounded-md p-3">
+            <div className="bg-gray-700 border border-indigo-600 rounded-md p-3">
               <p className="text-xs text-gray-300">Cash</p>
               <p className="text-lg text-white font-semibold">
                 {balances
@@ -388,17 +344,17 @@ const CryptoTrade = () => {
                   : "—"}
               </p>
             </div>
-            <div className="bg-gray-700 border border-yellow-600 rounded-md p-3">
+            <div className="bg-gray-700 border border-indigo-600 rounded-md p-3">
               <p className="text-xs text-gray-300">
                 Holdings
               </p>
               <p className="text-lg text-white font-semibold">
-                {balances ? (
-                  <>
-                    {fmtQty(holdingQty)} {selectedSymbol} (
-                    {selectedPrice ? `$${fmtUsd(holdingVal)}` : "—"})
-                  </>
-                ) : "—"}
+                {balances ? (balances.forex[selectedSymbol] ?? 0) : "—"}{" "}
+                {selectedSymbol} (
+                  {balances && prices[selectedSymbol]
+                    ? `$${(((balances.forex[selectedSymbol] ?? 0) * (prices[selectedSymbol] ?? 0))).toFixed(2)}`
+                    : "—"}
+                )
               </p>
             </div>
           </div>
@@ -414,12 +370,8 @@ const CryptoTrade = () => {
               <input
                 type="text"
                 readOnly
-                value={
-                  selectedPrice != null
-                    ? selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 8 })
-                    : ""
-                }
-                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                value={selectedPrice != null ? selectedPrice : ""}
+                className="w-full px-3 py-2 border border-indigo-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
             </div>
 
@@ -431,7 +383,7 @@ const CryptoTrade = () => {
               <select
                 value={tradeAction}
                 onChange={(e) => setTradeAction(e.target.value as "buy" | "sell")}
-                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                className="w-full px-3 py-2 border border-indigo-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               >
                 <option value="buy">Buy</option>
                 <option value="sell">Sell</option>
@@ -446,14 +398,13 @@ const CryptoTrade = () => {
               <input
                 type="number"
                 inputMode="decimal"
-                step={qtyStep}
                 min="0"
                 value={Number.isNaN(quantity) ? "" : quantity}
                 onChange={(e) => {
                   const val = parseFloat(e.target.value);
                   setQuantity(val);
                 }}
-                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent placeholder-gray-400"
+                className="w-full px-3 py-2 border border-indigo-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder-gray-400"
                 placeholder={`Amount of ${selectedSymbol}`}
               />
             </div>
@@ -468,10 +419,10 @@ const CryptoTrade = () => {
                 readOnly
                 value={
                   selectedPrice && quantity > 0
-                    ? (selectedPrice * quantity).toLocaleString(undefined, { maximumFractionDigits: 8 })
+                    ? `$${(selectedPrice * quantity).toFixed(2)}`
                     : "N/A"
                 }
-                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                className="w-full px-3 py-2 border border-indigo-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
             </div>
 
@@ -479,9 +430,14 @@ const CryptoTrade = () => {
             <div>
               <button
                 type="submit"
-                className={"w-full font-medium py-2 px-4 rounded-md transition bg-yellow-600 text-white hover:bg-yellow-700"}
+                disabled={marketOpen === false}
+                className={`w-full font-medium py-2 px-4 rounded-md transition ${
+                  marketOpen === false
+                    ? "bg-gray-600 text-gray-400 cursor-not-allowed"
+                    : "bg-indigo-600 text-white hover:bg-indigo-700"
+                }`}
               >
-                Submit Order
+                {marketOpen === false ? "Market Closed" : "Submit Order"}
               </button>
             </div>
 
@@ -510,7 +466,7 @@ const CryptoTrade = () => {
         />
 
         {/* Main Chart */}
-        <div className="bg-gray-800 rounded-lg border border-yellow-700 p-6">
+        <div className="bg-gray-800 rounded-lg border border-indigo-700 p-6">
           <div className="flex flex-wrap gap-2 mb-4">
             <RangeButton value="1D" label="1 day" />
             <RangeButton value="1W" label="1 week" />
@@ -523,14 +479,14 @@ const CryptoTrade = () => {
           {loading ? (
             <div className="flex items-center justify-center h-96">
               <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mx-auto mb-4"></div>
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mx-auto mb-4"></div>
                 <p className="text-gray-400">Loading prices...</p>
               </div>
             </div>
           ) : historyLoading ? (
             <div className="flex items-center justify-center h-96">
               <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mx-auto mb-4"></div>
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mx-auto mb-4"></div>
                 <p className="text-gray-400">Loading {selectedSymbol} history...</p>
               </div>
             </div>
@@ -539,11 +495,12 @@ const CryptoTrade = () => {
               <HistoryChart
                 symbol={selectedSymbol}
                 price={prices[selectedSymbol]}
-                candles={history[`${selectedSymbol}|${range}`]?.history ?? []}
+                candles={history[cacheKey]?.history ?? []}
                 yLabel="Price"
-                color="#e0d700"
-                fill="rgba(240,215,0,0.2)"
+                color="#6366f1"
+                fill="rgba(99,102,241,0.2)"
                 decimals={2}
+                marketOpen={marketOpen}
               />
             </div>
           )}
@@ -553,4 +510,4 @@ const CryptoTrade = () => {
   );
 };
 
-export default CryptoTrade;
+export default ForexTrade;

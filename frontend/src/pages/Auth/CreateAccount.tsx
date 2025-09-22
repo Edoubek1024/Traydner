@@ -12,29 +12,30 @@ const CreateAccount = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
 
   const navigate = useNavigate();
 
-  async function updateBackendUser(user: any) {
+  async function updateBackendUser(user: any, firstName?: string, lastName?: string) {
     const idToken = await user.getIdToken();
+    const display = (user.displayName?.trim())
+      || [firstName, lastName].filter(Boolean).join(" ").trim()
+      || null;
+
     const payload = {
       email: user.email,
-      displayName: user.displayName,
+      firstName: firstName?.trim() || "",
+      lastName:  lastName?.trim()  || "",
+      displayName: display,
     };
 
     const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/users/update`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${idToken}`
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
       body: JSON.stringify(payload),
     });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || "Failed to sync user with backend");
-    }
+    if (!res.ok) throw new Error("Failed to sync user with backend");
   }
 
   const handleSignUp = async () => {
@@ -48,10 +49,10 @@ const CreateAccount = () => {
     setLoading(true);
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      await updateBackendUser(userCredential.user);
+      await updateBackendUser(userCredential.user, firstName, lastName);
       console.log("User created:", userCredential.user);
       setSuccess(true);
-      navigate("/Home");
+      navigate("/home");
     } catch (err: any) {
       const rawMessage = err.message || "";
       const cleanedMessage = rawMessage
@@ -70,10 +71,11 @@ const CreateAccount = () => {
 
     try {
       const result = await signInWithPopup(auth, provider);
-      await updateBackendUser(result.user);
+      const parts = (result.user.displayName || "").trim().split(/\s+/);
+      await updateBackendUser(result.user, parts[0] || "", parts.slice(1).join(" ") || "");
       console.log("Google Sign-In user:", result.user);
       setSuccess(true);
-      navigate("/Home");
+      navigate("/home");
     } catch (err: any) {
       const rawMessage = err.message || "";
       const cleanedMessage = rawMessage
@@ -135,6 +137,70 @@ const CreateAccount = () => {
             </div>
 
             <div className="mb-3">
+              <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 mb-2">
+                First Name
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  {/* Pencil Icon */}
+                  <svg
+                    className="h-5 w-5 text-gray-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3zM3 21h18"
+                    />
+                  </svg>
+                </div>
+                <input
+                  id="firstName"
+                  type="text"
+                  placeholder="Enter your first name"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-200 bg-gray-50 focus:bg-white"
+                />
+              </div>
+            </div>
+
+            <div className="mb-3">
+              <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 mb-2">
+                Last Name
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  {/* Pencil Icon */}
+                  <svg
+                    className="h-5 w-5 text-gray-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3-6 6H9v-3zM3 21h18"
+                    />
+                  </svg>
+                </div>
+                <input
+                  id="lastName"
+                  type="text"
+                  placeholder="Enter your last name"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all duration-200 bg-gray-50 focus:bg-white"
+                />
+              </div>
+            </div>
+
+            <div className="mb-3">
               <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
                 Password
               </label>
@@ -186,7 +252,7 @@ const CreateAccount = () => {
             <div className="space-y-4 mb-4">
               <button
                 onClick={handleSignUp}
-                disabled={!email || !password || loading}
+                disabled={!email || !password || !firstName.trim() || !lastName.trim() || loading}
                 className="w-full bg-gradient-to-r from-green-600 to-lime-600 text-white py-3 px-4 rounded-lg font-semibold text-lg transition-all duration-300 transform hover:scale-105 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:hover:scale-100"
               >
                 {loading ? (

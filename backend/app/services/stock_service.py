@@ -49,50 +49,66 @@ async def get_current_price(symbol: str) -> dict:
             "error": "Price not found in database"
         }
 
-async def get_stock_history(symbol: str, resolution: str) -> dict:
+# stock_service.py
+async def get_stock_history(
+    symbol: str,
+    resolution: str,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+    limit: int = 500,
+) -> dict:
     try:
         ticker = yf.Ticker(symbol)
 
-        resolution_map = {
-            "1m": ("7d", "1m"),
+        # Yahoo-friendly mapping
+        res_map = {
+            "1m": ("7d",  "1m"),
             "5m": ("60d", "5m"),
-            "15m": ("60d", "15m"),
-            "30m": ("60d", "30m"),
-            "60m": ("730d", "60m"),
-            "1d": ("5y", "1d"),
-            "1wk": ("5y", "1wk"),
-            "1mo": ("5y", "1mo"),
+            "15m":("60d", "15m"),
+            "30m":("60d", "30m"),
+            "60m":("730d","60m"),
+            "1d": (None,  "1d"),
+            "1wk":(None,  "1wk"),
+            "1mo":(None,  "1mo"),
         }
-
-        if resolution not in resolution_map:
+        if resolution not in res_map:
             return {"error": f"Unsupported resolution: {resolution}"}
 
-        period, interval = resolution_map[resolution]
-        df = ticker.history(period=period, interval=interval)
+        period, interval = res_map[resolution]
 
-        history = [
+        def load():
+            # For intraday, Yahoo requires period; for daily+ we can use start/end if provided.
+            if period:
+                return ticker.history(period=period, interval=interval)
+            if start_ts and end_ts:
+                return ticker.history(
+                    start=datetime.utcfromtimestamp(start_ts),
+                    end=datetime.utcfromtimestamp(end_ts),
+                    interval=interval,
+                )
+            # fallback small-ish period instead of 5y
+            return ticker.history(period="1y", interval=interval)
+
+        df = await asyncio.to_thread(load)
+
+        rows = [
             {
                 "timestamp": int(time.mktime(idx.timetuple())),
-                "open": float(row["Open"]),
-                "high": float(row["High"]),
-                "low": float(row["Low"]),
-                "close": float(row["Close"]),
-                "volume": int(row["Volume"])
+                "open": float(r["Open"]),
+                "high": float(r["High"]),
+                "low": float(r["Low"]),
+                "close": float(r["Close"]),
+                "volume": int(r.get("Volume", 0) or 0),
             }
-            for idx, row in df.iterrows()
+            for idx, r in df.iterrows()
         ]
+        if limit and len(rows) > limit:
+            rows = rows[-limit:]
 
-        return {
-            "symbol": symbol.upper(),
-            "resolution": resolution,
-            "history": history
-        }
-
+        return {"symbol": symbol.upper(), "resolution": resolution, "history": rows}
     except Exception as e:
-        return {
-            "error": str(e),
-            "trace": traceback.format_exc()
-        }
+        return {"error": str(e), "trace": traceback.format_exc()}
+
     
 async def stock_trade(symbol: str, action: str, quantity: int, price: float, user_id: str) -> dict:
     try:

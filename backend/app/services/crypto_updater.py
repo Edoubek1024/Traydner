@@ -8,7 +8,7 @@ from app.db.mongo import crypto_prices_collection
 BINANCE_US_URL = "https://api.binance.us/api/v3/ticker/price"
 
 def _fetch_binance_price_sync(symbol: str) -> float:
-    pair = f"{symbol.upper()}USDT"
+    pair = f"{symbol.upper()}USD"
     with httpx.Client(timeout=10.0) as client:
         r = client.get(BINANCE_US_URL, params={"symbol": pair})
         r.raise_for_status()
@@ -48,6 +48,7 @@ def run_crypto_price_loop(stop_event: threading.Event, symbols: Iterable[str], i
 
             backoff = 1
             stop_event.wait(interval_seconds)
+            print(f"✅ Updated crypto at {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         except Exception as e:
             print(f"❌ Crypto updater loop error: {e}; backing off {backoff}s")
