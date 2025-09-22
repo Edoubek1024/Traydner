@@ -62,7 +62,7 @@ async def get_stock_history(
 
         # Yahoo-friendly mapping
         res_map = {
-            "1m": ("7d",  "1m"),
+            "1m": ("1d",  "1m"),
             "5m": ("60d", "5m"),
             "15m":("60d", "15m"),
             "30m":("60d", "30m"),

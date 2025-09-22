@@ -201,7 +201,7 @@ async def get_forex_history(
 
         # Map resolution to (period, interval). For intraday Yahoo requires a period.
         res_map = {
-            "1m": ("5d", "1m"),       # last 1 day of 1m candles
+            "1m": ("1d", "1m"),       # last 1 day of 1m candles
             "5m": ("7d", "5m"),       # last 7 days max
             "15m": ("60d", "15m"),    # last 60 days
             "60m": ("6mo", "60m"),   # ~2 years
