@@ -1,11 +1,20 @@
 export const FOREX = [
   { symbol: "EUR", name: "Euro" },
-  { symbol: "GBP", name: "British Pound" },
   { symbol: "JPY", name: "Japanese Yen" },
-  { symbol: "CHF", name: "Swiss Franc" },
-  { symbol: "CAD", name: "Canadian Dollar" },
+  { symbol: "GBP", name: "British Pound" },
   { symbol: "AUD", name: "Australian Dollar" },
   { symbol: "NZD", name: "New Zealand Dollar" },
+  { symbol: "CNY", name: "Chinese Yuan" },
+  { symbol: "HKD", name: "Hong Kong Dollar" },
+  { symbol: "SGD", name: "Singapore Dollar" },
+  { symbol: "INR", name: "Indian Rupee" },
+  { symbol: "MXN", name: "Mexican Peso" },
+  { symbol: "PHP", name: "Philippine Peso" },
+  { symbol: "IDR", name: "Indonesian Rupiah" },
+  { symbol: "THB", name: "Thai Baht" },
+  { symbol: "MYR", name: "Malaysian Ringgit" },
+  { symbol: "ZAR", name: "South African Rand" },
+  { symbol: "RUB", name: "Russian Ruble" },
 ] as const;
 
 export type ForexTicker = typeof FOREX[number]["symbol"];
