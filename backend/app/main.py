@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import stock_routes, user_routes, crypto_routes, forex_routes
 from app.firebase.firebase_setup import *
 
+from app.firebase.firebase_setup import init_firebase
+
 from app.services.stock_updater import run_stock_price_loop, run_stock_history_loop
 from app.services.crypto_updater import run_crypto_price_loop, run_crypto_history_loop
 from app.services.forex_updater import run_forex_price_loop, run_forex_history_loop
@@ -13,6 +15,9 @@ import asyncio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+
+    init_firebase()
+    
     stock_stop = threading.Event()
     stock_thread = threading.Thread(target=run_stock_price_loop, args=(stock_stop,), daemon=True)
     stock_thread.start()
