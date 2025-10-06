@@ -1,11 +1,13 @@
 import time
 import traceback
 import asyncio
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 from datetime import time as dt_time
 from pytz import timezone
+from datetime import timezone as dt_timezone
 import holidays
-from app.db.mongo import stock_prices_collection, users_collection, trades_collection
+from app.db.mongo import stock_prices_collection, users_collection, trades_collection, stock_histories_collection
 
 async def get_user_balance(uid: str) -> dict:
     user = await asyncio.to_thread(users_collection.find_one, {"uid": uid})
@@ -67,9 +69,9 @@ async def get_stock_history(
             "15m":("60d", "15m"),
             "30m":("60d", "30m"),
             "60m":("730d","60m"),
-            "1d": (None,  "1d"),
-            "1wk":(None,  "1wk"),
-            "1mo":(None,  "1mo"),
+            "1d": ("5y",  "1d"),
+            "1wk":("10y",  "1wk"),
+            "1mo":("10y",  "1mo"),
         }
         if resolution not in res_map:
             return {"error": f"Unsupported resolution: {resolution}"}
@@ -87,21 +89,26 @@ async def get_stock_history(
                     interval=interval,
                 )
             # fallback small-ish period instead of 5y
-            return ticker.history(period="1y", interval=interval)
+            return ticker.history(period="5y", interval=interval)
 
         df = await asyncio.to_thread(load)
+        if df.index.tz is None:
+            idx_utc = [dt.replace(tzinfo=dt_timezone.utc) for dt in df.index.to_pydatetime()]
+        else:
+            idx_utc = [dt.astimezone(dt_timezone.utc) for dt in df.index.to_pydatetime()]
 
-        rows = [
-            {
-                "timestamp": int(time.mktime(idx.timetuple())),
-                "open": float(r["Open"]),
-                "high": float(r["High"]),
-                "low": float(r["Low"]),
-                "close": float(r["Close"]),
-                "volume": int(r.get("Volume", 0) or 0),
-            }
-            for idx, r in df.iterrows()
-        ]
+        rows = []
+        for idx_dt_utc, r in zip(idx_utc, df.to_dict("records")):
+            rows.append({
+                "timestamp": int(idx_dt_utc.timestamp()),  # <-- correct, UTC epoch seconds
+                "open":   float(r.get("Open",   0)),
+                "high":   float(r.get("High",   0)),
+                "low":    float(r.get("Low",    0)),
+                "close":  float(r.get("Close",  0)),
+                "volume": int(  r.get("Volume", 0) or 0),
+            })
+
+        
         if limit and len(rows) > limit:
             rows = rows[-limit:]
 
@@ -166,3 +173,62 @@ async def stock_trade(symbol: str, action: str, quantity: int, price: float, use
         print("❌ Backend trade error:", e)
         traceback.print_exc()
         return {"error": str(e), "trace": traceback.format_exc()}
+    
+def _normalize_stock_res_key(resolution: str) -> str:
+    key = resolution.upper()
+    # normalize common inputs
+    if key in {"1", "1M", "1MIN", "1MINUTE"}: return "1"
+    if key in {"5", "5M"}: return "5"
+    if key in {"15", "15M"}: return "15"
+    if key in {"30", "30M"}: return "30"
+    if key in {"60", "60M", "1H"}: return "60"
+    if key in {"D", "1D", "DAY"}: return "D"
+    if key in {"W", "1W", "WEEK"}: return "W"
+    return key
+
+async def get_stock_history_db(
+    symbol: str,
+    resolution: str,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+    limit: int = 500,
+) -> Dict[str, Any]:
+    """
+    Return candles from Mongo (ASC). Applies:
+      1) time-window filter with exclusive end (s <= ts < e)
+      2) then limit (last N)
+    """
+    sym = symbol.upper()
+    key = _normalize_stock_res_key(resolution)
+
+    doc = await asyncio.to_thread(stock_histories_collection.find_one, {"symbol": sym})
+    if not doc or "histories" not in doc:
+        return {"symbol": sym, "resolution": key, "history": []}
+
+    candles: List[Dict[str, Any]] = (doc["histories"] or {}).get(key, []) or []
+
+    # sort ASC defensively (some writers can append out-of-order)
+    if candles and (len(candles) > 1) and (candles[0]["timestamp"] > candles[-1]["timestamp"]):
+        candles = sorted(candles, key=lambda c: int(c.get("timestamp", 0)))
+    # (cheap check) ensure ASC
+    elif candles and any(candles[i]["timestamp"] > candles[i+1]["timestamp"] for i in range(len(candles)-1)):
+        candles = sorted(candles, key=lambda c: int(c.get("timestamp", 0)))
+
+    # filter by window (end is EXCLUSIVE)
+    if start_ts is not None or end_ts is not None:
+        s = int(start_ts) if start_ts is not None else -10**18
+        e = int(end_ts)   if end_ts   is not None else  10**18
+        # EXCLUSIVE end fixes 1D day window off-by-one issues
+        candles = [c for c in candles if s <= int(c.get("timestamp", 0)) < e]
+
+    # apply limit (take the most recent N, but keep ASC order)
+    if limit and len(candles) > limit:
+        candles = candles[-limit:]
+
+    return {
+        "symbol": sym,
+        "resolution": key,
+        "history": candles,
+        "source": "mongo",
+        "updatedAt": doc.get("updatedAt"),
+    }

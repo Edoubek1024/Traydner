@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { auth } from "../../firebase/firebaseConfig";
 import { CRYPTO_SYMBOLS, getCryptoDisplayName, CryptoTicker } from "../../config/cryptoConfig";
 import { onIdTokenChanged } from "firebase/auth";
-import { CryptoBalances, CryptoHistory, fetchCryptoBalances, fetchCryptoHistory, fetchCryptoPrice } from "../../api/crypto";
+import { CryptoBalances, CryptoHistory, fetchCryptoBalances, fetchCryptoHistoryDb, fetchCryptoPrice } from "../../api/crypto";
 import HistoryChart from "../../components/Charts/HistoryChart";
 import ConfirmTradeModal from "../../components/Modals/ConfirmTradeModal"
 
@@ -10,12 +10,12 @@ type RangeKey = "1D" | "1W" | "1M" | "3M" | "YTD" | "1Y" | "5Y";
 
 const RANGE_META: Record<RangeKey, { res: string; slice?: number | null }> = {
   "1D": { res: "5", slice: 288 },
-  "1W": { res: "15", slice: 672 },
-  "1M": { res: "60", slice: 720 },
+  "1W": { res: "30", slice: 336 },
+  "1M": { res: "120", slice: 360 },
   "3M": { res: "240", slice: 540 },
-  "YTD": { res: "D", slice: 365 },
-  "1Y": { res: "D", slice: 365 },
-  "5Y": { res: "W", slice: 260 },
+  "YTD": { res: "D", slice: 366 },
+  "1Y": { res: "D", slice: 366 },
+  "5Y": { res: "W", slice: 261 },
 };
 
 const CryptoTrade = () => {
@@ -79,34 +79,16 @@ const CryptoTrade = () => {
   async function fetchCandlesInChunks(
     symbol: string,
     res: string,
-    start: number,
-    end: number,
+    start: number | undefined,
+    end: number | undefined,
     needed: number
   ): Promise<any[]> {
-    let all: any[] = [];
-    let cursorEnd: number | undefined = end;
-
-    while (all.length < needed) {
-      const remaining = needed - all.length;
-
-      const batch = await fetchCryptoHistory(symbol, res, {
-        end: cursorEnd,
-        limit: Math.min(remaining, 1000),
-      });
-
-      const candles = batch.history ?? [];
-      if (!candles.length) break;
-
-      all = [...candles, ...all];
-
-      cursorEnd = candles[0].timestamp - 60;
-
-      if (cursorEnd <= start) break;
-    }
-
-    all = all.filter(c => c.timestamp >= start);
-
-    return all.slice(-needed);
+    const data = await fetchCryptoHistoryDb(symbol, res, {
+      start,
+      end,
+      limit: needed,
+    });
+    return data.history ?? [];
   }
 
   useEffect(() => {
@@ -125,7 +107,7 @@ const CryptoTrade = () => {
         if (range === "1D") {
           const now = Math.floor(Date.now() / 1000);
           const oneDayAgo = now - 24 * 60 * 60;
-          candles = await fetchCandlesInChunks(selectedSymbol, res, oneDayAgo, now, 1440);
+          candles = await fetchCandlesInChunks(selectedSymbol, res, oneDayAgo, now, RANGE_META["1D"].slice ?? 288);
         } else if (range === "1W") {
           const oneWeekAgo = now - 7 * 24 * 60 * 60;
           candles = await fetchCandlesInChunks(selectedSymbol, res, oneWeekAgo, now, sliceCount ?? 390);
@@ -195,19 +177,30 @@ const CryptoTrade = () => {
         const { res, slice: sliceCount } = RANGE_META[range];
         const now = Math.floor(Date.now() / 1000);
 
-        let candles: any[] = [];
-        if (range === "1D") {
-          const oneDayAgo = now - 24 * 60 * 60;
-          candles = await fetchCandlesInChunks(selectedSymbol, res, oneDayAgo, now, 1440);
-        }
+        // compute start for the active range
+        let start: number | undefined;
+        if (range === "1D")        start = now - 24 * 60 * 60;
+        else if (range === "1W")   start = now - 7  * 24 * 60 * 60;
+        else if (range === "1M")   start = now - 30 * 24 * 60 * 60;
+        else if (range === "3M")   start = now - 90 * 24 * 60 * 60;
+        else if (range === "YTD")  start = Math.floor(Date.UTC(new Date().getUTCFullYear(), 0, 1) / 1000);
+        else if (range === "1Y")   start = now - 365 * 24 * 60 * 60;
+        else if (range === "5Y")   start = now - 5 * 365 * 24 * 60 * 60;
 
-        if (sliceCount && candles.length > sliceCount) {
-          candles = candles.slice(-sliceCount);
-        }
+        // ask for at most the range's slice (matches server caps)
+        const limit = sliceCount ?? 500;
+
+        const candles = await fetchCandlesInChunks(
+          selectedSymbol,
+          res,
+          start,
+          now,
+          limit
+        );
 
         setHistory(prev => ({
           ...prev,
-          [cacheKey]: { symbol: selectedSymbol, resolution: res, history: candles },
+          [cacheKey]: { symbol: selectedSymbol, resolution: res, history: candles.slice(-(sliceCount ?? candles.length)) },
         }));
       } catch (err) {
         console.error("Minute refresh failed:", err);
@@ -215,7 +208,6 @@ const CryptoTrade = () => {
     }
 
     cleanup = scheduleEveryMinute(refresh);
-
     refresh();
 
     return () => {

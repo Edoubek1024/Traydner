@@ -70,3 +70,21 @@ export async function fetchForexBalances(): Promise<ForexBalances> {
   const data: BalancesResponse = await res.json();
   return data.balance;
 }
+
+export async function fetchForexHistoryDb(
+  symbol: string,
+  resolution: string,
+  opts?: { start?: number; end?: number; limit?: number }
+) {
+  const params = new URLSearchParams({ symbol, resolution });
+  if (opts?.start !== undefined) params.set("start", String(opts.start));
+  if (opts?.end   !== undefined) params.set("end",   String(opts.end));
+  if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+
+  const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/forex/history/db?` + params.toString());
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.detail || "Failed to fetch forex history (db)");
+  }
+  return res.json(); // { symbol, resolution, history: Candle[] }
+}

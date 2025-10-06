@@ -87,3 +87,26 @@ export async function fetchCryptoHistory(
   const data: CryptoHistory = await res.json();
   return data;
 }
+
+// NEW: DB-backed history (uses your Mongo histories, not Binance)
+export async function fetchCryptoHistoryDb(
+  symbol: string,
+  resolution: string,
+  opts?: { start?: number; end?: number; limit?: number }
+) {
+  const params = new URLSearchParams({ symbol, resolution });
+
+  if (opts?.start) params.set("start", String(opts.start));
+  if (opts?.end)   params.set("end",   String(opts.end));
+  if (opts?.limit) params.set("limit", String(opts.limit));
+
+  const res = await fetch(
+    `${import.meta.env.VITE_API_BASE_URL}/api/crypto/history/db?${params.toString()}`
+  );
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.error || data?.detail || "DB history fetch failed");
+  }
+  return res.json(); // { symbol, resolution, history, updatedAt, source: "mongo" }
+}

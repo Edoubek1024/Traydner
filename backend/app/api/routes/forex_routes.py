@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query, HTTPException, Depends
 from typing import Optional
-from app.services.forex_service import get_current_forex_price, get_forex_history, get_user_forex_balance, forex_trade, get_forex_market_status
+from app.services.forex_service import get_current_forex_price, get_forex_history, get_user_forex_balance, forex_trade, get_forex_market_status, get_forex_history_db
 from typing import Literal
 from pydantic import BaseModel
 
@@ -84,3 +84,19 @@ async def submit_order(
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+@router.get("/history/db")
+async def get_history_db(
+    symbol: str = Query(..., description="Forex base, e.g. EUR, JPY"),
+    resolution: str = Query("D", description="1,5,15,30,60,240,D,DY,W,M"),
+    start: Optional[int] = Query(None, description="unix seconds"),
+    end:   Optional[int] = Query(None, description="unix seconds"),
+    limit: int = Query(500, ge=1, le=2000),
+):
+    return await get_forex_history_db(
+        base=symbol,
+        resolution=resolution,
+        start_ts=start,
+        end_ts=end,
+        limit=limit,
+    )

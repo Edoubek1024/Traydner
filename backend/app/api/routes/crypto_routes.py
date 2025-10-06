@@ -2,7 +2,7 @@ from fastapi import APIRouter, Query, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Literal
 import httpx
-from app.services.crypto_service import get_user_crypto_balance, get_crypto_price_db, crypto_trade, get_crypto_history
+from app.services.crypto_service import get_user_crypto_balance, get_crypto_price_db, crypto_trade, get_crypto_history, get_crypto_history_db
 
 from app.firebase.firebase_auth import firebase_user
 
@@ -71,3 +71,19 @@ async def submit_crypto_order(
     if isinstance(result, dict) and "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+@router.get("/history/db")
+async def crypto_history_db(
+    symbol: str = Query(..., description="Crypto symbol, e.g. BTC, ETH"),
+    resolution: str = Query("D", description="Stored buckets: 1,5,15,30,60,120,240,D,W,M"),
+    start: int | None = Query(None, description="Start time (unix seconds)"),
+    end: int | None = Query(None, description="End time (unix seconds)"),
+    limit: int = Query(500, ge=1, le=1000),
+):
+    try:
+        data = await get_crypto_history_db(symbol, resolution, start_ts=start, end_ts=end, limit=limit)
+        if "error" in data:
+            raise HTTPException(status_code=404, detail=data["error"])
+        return data
+    except Exception:
+        raise HTTPException(status_code=500, detail="Internal server error")

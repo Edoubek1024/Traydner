@@ -2,7 +2,7 @@ from fastapi import APIRouter, Query, HTTPException, Depends
 from app.services.stock_service import stock_trade
 from app.firebase.firebase_auth import firebase_user
 from pydantic import BaseModel
-from app.services.stock_service import get_current_price, get_stock_history, is_market_open, get_user_balance
+from app.services.stock_service import get_current_price, get_stock_history, is_market_open, get_user_balance, get_stock_history_db
 from typing import Literal, Optional
 
 router = APIRouter(prefix="/api/stocks", tags=["Stocks"])
@@ -68,3 +68,14 @@ async def get_stock_balance(user_data=Depends(firebase_user)):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
+    
+@router.get("/history/db")
+async def stocks_history_db(
+    symbol: str,
+    resolution: str,
+    start: Optional[int] = Query(None, description="UTC seconds (inclusive)"),
+    end: Optional[int]   = Query(None, description="UTC seconds (exclusive)"),
+    limit: Optional[int] = Query(500, ge=1, le=5000),
+):
+    data = await get_stock_history_db(symbol, resolution, start_ts=start, end_ts=end, limit=limit or 500)
+    return data

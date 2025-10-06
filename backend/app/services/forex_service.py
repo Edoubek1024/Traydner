@@ -1,128 +1,129 @@
 import re, time
-import os, sys, subprocess
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common.exceptions import TimeoutException
-from contextlib import contextmanager, redirect_stderr
-from app.db.mongo import forex_prices_collection, users_collection, trades_collection
+from app.db.mongo import forex_prices_collection, users_collection, trades_collection, forex_histories_collection
 import asyncio
 import traceback
 from datetime import datetime, time as dt_time, timezone as dt_tz
 from pytz import timezone
+import requests
+import math
 
 NUMERIC_RE = re.compile(r"\d")
 starting_now = time.time()
 
-@contextmanager
-def _suppress_child_stderr_during_startup():
-    """
-    Temporarily redirect FD 2 (stderr) to NUL so child processes (Chrome)
-    can't print early startup logs (absl/voice_transcription) to console.
-    """
-    sys.stderr.flush()
-    stderr_fd = sys.stderr.fileno()
-    saved = os.dup(stderr_fd)
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+URL = "https://finance.yahoo.com/markets/currencies/"
+HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0.0.0 Safari/537.36"),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
+
+def _extract_price_from_td(td):
     try:
-        os.dup2(devnull_fd, stderr_fd)
-        yield
-    finally:
-        os.dup2(saved, stderr_fd)
-        os.close(saved)
-        os.close(devnull_fd)
+        fs = td.select_one("fin-streamer")
+        candidates = []
+        if fs:
+            for attr in ("value", "data-value", "data-price"):
+                v = fs.get(attr)
+                if v:
+                    candidates.append(v)
+            txt = fs.get_text(strip=True)
+            if txt:
+                candidates.append(txt)
+        raw = td.get_text(strip=True)
+        if raw:
+            candidates.append(raw)
 
-def _dismiss_consent(driver, timeout=5):
+        for c in candidates:
+            try:
+                val = float(
+                    c.replace("\u2212", "-")  # unicode minus
+                     .replace("\u2009", "")   # thin space
+                     .replace("\xa0", "")     # nbsp
+                     .replace(",", "")
+                     .strip()
+                )
+                if math.isfinite(val):
+                    return val
+            except Exception:
+                continue
+        return None
+    except Exception as e:
+        print(f"⚠️ price extract error: {e}")
+        return None
+
+def scrape_yahoo_currencies_html(url: str = URL) -> dict[str, float]:
     try:
-        WebDriverWait(driver, timeout).until(
-            EC.any_of(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Accept')]")),
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Agree')]")),
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'I agree')]")),
-            )
-        ).click()
-    except Exception:
-        pass
-
-def _wait_for_numeric_price(driver, timeout=20):
-    end = time.time() + timeout
-    while time.time() < end:
-        rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
-        for row in rows[:50]:
-            tds = row.find_elements(By.CSS_SELECTOR, "td")
-            if len(tds) >= 2:
-                txt = tds[1].text.strip()
-                if txt and txt.upper() != "N/A" and NUMERIC_RE.search(txt):
-                    return True
-        time.sleep(0.25)
-    raise TimeoutException("No numeric price appeared in table cells")
-
-def scrape_fxstreet_rendered(url: str):
-    opts = Options()
-    opts.add_argument("--headless=new")  # or "--headless" if 'new' isn't supported
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--remote-debugging-pipe")   # << removes "DevTools listening ..." message
-    opts.add_argument("--log-level=3")            # fewer Chrome logs
-    opts.add_argument("--disable-webgl")
-    opts.add_argument("--disable-software-rasterizer")
-    opts.add_experimental_option("excludeSwitches", ["enable-logging"])
-    opts.add_argument("--log-file=NUL")
-    opts.add_argument("--disable-features=LiveCaption,OnDeviceSpeechRecognition,SpeechRecognition")
-
-    service = Service(ChromeDriverManager().install(), log_output=subprocess.DEVNULL)
-
-    devnull = open(os.devnull, "w")
-    with redirect_stderr(devnull), _suppress_child_stderr_during_startup():
-        driver = webdriver.Chrome(service=service, options=opts)
-    devnull.close()
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"⚠️ request failed: {e}")
+        return {}
 
     try:
-        driver.get(url)
-        _dismiss_consent(driver)
+        soup = BeautifulSoup(resp.text, "html.parser")
+    except Exception as e:
+        print(f"⚠️ parse failed: {e}")
+        return {}
 
-        # Wait for table to be present
-        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.CSS_SELECTOR, "table")))
-        # Nudge scrolling to trigger lazy fill
-        table = driver.find_element(By.CSS_SELECTOR, "table")
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'})", table)
+    raw: dict[str, float] = {}
+    try:
+        for row in soup.select("table tbody tr"):
+            try:
+                a = row.select_one('td[data-testid-cell="ticker"] a')
+                if not a:
+                    continue
+                sym = (a.get_text() or "").strip().upper()
+                if not sym.endswith("=X"):
+                    continue
 
-        # Wait until at least one price is numeric (not N/A)
-        _wait_for_numeric_price(driver, timeout=25)
+                price_td = row.select_one('td[data-testid-cell="intradayprice"]')
+                if not price_td:
+                    continue
 
-        # Now parse rendered HTML
-        html = driver.page_source
-    finally:
-        driver.quit()
+                px = _extract_price_from_td(price_td)
+                if px is None or not math.isfinite(px):
+                    continue
+                raw[sym] = float(px)
+            except Exception as e_row:
+                print(f"⚠️ row skipped due to error: {e_row}")
+                continue
+    except Exception as e:
+        print(f"⚠️ table walk failed: {e}")
+        return {}
 
-    soup = BeautifulSoup(html, "html.parser")
-    table = soup.find("table")
-    if not table:
-        return []
+    # Convert to USD-based mapping: {NONUSD: USD per 1 unit}
+    usd_map: dict[str, float] = {}
+    try:
+        for sym, px in raw.items():
+            core = sym[:-2]  # strip '=X'
+            if len(core) == 6:
+                base, quote = core[:3], core[3:6]
+                if quote == "USD":
+                    usd_map[base] = px
+                elif base == "USD" and px:
+                    try:
+                        inv = 1.0 / px
+                        if math.isfinite(inv):
+                            usd_map[quote] = inv
+                    except Exception:
+                        continue
+            elif len(core) == 3:  # e.g., JPY=X implies USD/JPY
+                if px:
+                    try:
+                        inv = 1.0 / px
+                        if math.isfinite(inv):
+                            usd_map[core] = inv
+                    except Exception:
+                        continue
+            # ignore non-USD crosses/others
+    except Exception as e:
+        print(f"⚠️ conversion failed: {e}")
+        return {}
 
-    out = []
-    for tr in table.find_all("tr"):
-        # do NOT use recursive=False; tables often nest spans/divs
-        tds = tr.find_all("td", limit=2)
-        if len(tds) < 2:
-            continue
-
-        a = tds[0].find("a")
-        symbol = (a.get_text(strip=True) if a else tds[0].get_text(strip=True)).upper().replace(" ", "")
-        price_text = tds[1].get_text(strip=True)
-
-        if not symbol or "/" not in symbol:
-            continue
-        if not price_text or price_text.upper() == "N/A" or not NUMERIC_RE.search(price_text):
-            continue
-
-        out.append((symbol, float(price_text)))
-    return out
+    return usd_map
 
 async def get_forex_market_status() -> dict:
     eastern = timezone("US/Eastern")
@@ -148,22 +149,8 @@ async def get_forex_market_status() -> dict:
     }
 
 def get_usd_based_forex():
-    rows = scrape_fxstreet_rendered("https://www.fxstreet.com/rates-charts/rates")
-    prices = {}
-    for sym, px in rows:
-        s = sym.replace(" ", "").upper()
-        if "/" not in s:
-            continue
-        base, quote = s.split("/", 1)
-
-        if base == 'XAU' or base == 'BTC':
-            continue
-
-        if quote == "USD":
-            prices[f"{base}"] = float(px)
-        elif base == "USD":
-            prices[f"{quote}"] = 1.0 / float(px)
-    return prices
+    usd_map = scrape_yahoo_currencies_html("https://finance.yahoo.com/markets/currencies/")
+    return usd_map
 
 async def get_current_forex_price(symbol: str) -> dict:
     def fetch():
@@ -184,6 +171,11 @@ async def get_current_forex_price(symbol: str) -> dict:
         }
     
 # forex_service.py
+# forex_service.py
+import asyncio
+import traceback
+from datetime import datetime, timezone as dt_tz
+
 async def get_forex_history(
     base: str,
     resolution: str,
@@ -191,70 +183,127 @@ async def get_forex_history(
     end_ts: int | None = None,
     limit: int = 500,
 ) -> dict:
+    """
+    Fetch FX candles from Yahoo via yfinance.
+
+    Supported resolution tokens (case-insensitive):
+      Intraday:  "1m","5m","15m","30m","60m","120m","240m","4h"
+        - 30m will fallback to 15m (or 5m) and be resampled → 30m if native is empty
+        - 120m/240m are resampled from 60m
+      Higher TF: "1d","1d_ytd","1wk"
+    """
     try:
         import yfinance as yf
+
         base = base.strip().upper()
         if len(base) != 3:
             return {"error": f"Invalid base currency: {base}"}
 
         ticker = yf.Ticker(f"{base}USD=X")
 
-        # Map resolution to (period, interval). For intraday Yahoo requires a period.
-        res_map = {
-            "1m": ("1d", "1m"),       # last 1 day of 1m candles
-            "5m": ("7d", "5m"),       # last 7 days max
-            "15m": ("60d", "15m"),    # last 60 days
-            "60m": ("6mo", "60m"),   # ~2 years
-            "4h": ("6mo", "60m"),
-            "1d": ("5y", "1d"),       # daily candles up to 5 years
-            "1d_ytd": ("ytd", "1d"),  # daily candles YTD
-            "1wk": ("10y", "1wk"),    # 10 years of weekly candles
+        # Normalize resolution
+        res = resolution.lower()
+        if res == "4h":
+            res = "240m"
+
+        # Period windows that satisfy Yahoo limits for intraday
+        PERIOD_FOR = {
+            "1m":  "7d",
+            "5m":  "7d",
+            "15m": "60d",
+            "30m": "60d",
+            "60m": "730d",   # ~2 years
         }
-        if resolution not in res_map:
-            return {"error": f"Unsupported resolution: {resolution}"}
 
-        period, interval = res_map[resolution]
-
-        def load():
-            # Intraday intervals: must use period
-            if period:
+        def load_with(period: str | None, interval: str):
+            # Intraday: must use period query
+            if interval.endswith("m"):
                 return ticker.history(period=period, interval=interval)
-            # Daily+ can use explicit window if provided
+            # Daily/weekly: use explicit window if provided, else period
             if start_ts and end_ts:
                 return ticker.history(
                     start=datetime.fromtimestamp(start_ts, tz=dt_tz.utc),
                     end=datetime.fromtimestamp(end_ts, tz=dt_tz.utc),
                     interval=interval,
                 )
-            # Modest fallback (avoid 5y by default)
-            if resolution == "1d_ytd":
-                return ticker.history(period="ytd", interval="1d")
-            return ticker.history(period="1y", interval=interval)
+            return ticker.history(period=period or "1y", interval=interval)
 
-        df = await asyncio.to_thread(load)  # ← non-blocking
+        # ---------- Load DataFrame according to requested res ----------
+        df = None
+        if res in {"1m","5m","15m","30m","60m"}:
+            # Try native first
+            period = PERIOD_FOR[res]
+            df = await asyncio.to_thread(load_with, period, res)
+            # Special fallback: 30m → 15m → 5m (then resample to 30m)
+            if res == "30m" and (df is None or df.empty):
+                for fallback in ("15m", "5m"):
+                    fb_period = PERIOD_FOR[fallback]
+                    df_fb = await asyncio.to_thread(load_with, fb_period, fallback)
+                    if df_fb is not None and not df_fb.empty:
+                        df = df_fb
+                        res = "30m_from_" + fallback  # mark to resample below
+                        break
 
-        if resolution == "4h":
-            # Aggregate 1h candles into 4h buckets
-            df = df.resample("4H").agg({
-                "Open": "first",
-                "High": "max",
-                "Low": "min",
-                "Close": "last",
-                "Volume": "sum",
-            }).dropna()
+        elif res in {"120m","240m"}:
+            # Always fetch 60m and resample to 2H/4H
+            df = await asyncio.to_thread(load_with, PERIOD_FOR["60m"], "60m")
 
+        elif res in {"1d","1d_ytd","1wk"}:
+            period = {"1d": "5y", "1d_ytd": "ytd", "1wk": "10y"}[res]
+            interval = {"1d": "1d", "1d_ytd": "1d", "1wk": "1wk"}[res]
+            df = await asyncio.to_thread(load_with, period, interval)
+
+        else:
+            return {"error": f"Unsupported resolution: {resolution}"}
+
+        # ---------- Resampling for synthetic intervals ----------
+        if df is not None and not df.empty:
+            # 30m fallback resampling
+            if isinstance(res, str) and res.startswith("30m_from_"):
+                rule = "30T"  # 30 minutes
+                df = df.resample(rule).agg({
+                    "Open":  "first",
+                    "High":  "max",
+                    "Low":   "min",
+                    "Close": "last",
+                    "Volume":"sum",
+                }).dropna()
+
+            # 120m / 240m from 60m
+            elif resolution.lower() in {"120m","240m","4h"}:
+                rule = "2H" if resolution.lower() == "120m" else "4H"
+                df = df.resample(rule).agg({
+                    "Open":  "first",
+                    "High":  "max",
+                    "Low":   "min",
+                    "Close": "last",
+                    "Volume":"sum",
+                }).dropna()
+
+        # ---------- Convert to rows ----------
         rows = []
-        for idx, row in df.iterrows():
-            # robust UTC epoch seconds
-            ts = int(idx.timestamp()) if getattr(idx, "tzinfo", None) else int(datetime(idx.year, idx.month, idx.day, idx.hour, idx.minute, idx.second, tzinfo=dt_tz.utc).timestamp())
-            rows.append({
-                "timestamp": ts,
-                "open": float(row["Open"]),
-                "high": float(row["High"]),
-                "low": float(row["Low"]),
-                "close": float(row["Close"]),
-                "volume": int(row.get("Volume", 0) or 0),
-            })
+        if df is not None and not df.empty:
+            df = df.sort_index()
+            # If caller passed start/end (rare for intraday), filter after resample too
+            lo = start_ts if start_ts is not None else -10**15
+            hi = end_ts   if end_ts   is not None else  10**15
+            for idx, row in df.iterrows():
+                ts = int(idx.timestamp()) if getattr(idx, "tzinfo", None) else int(
+                    datetime(idx.year, idx.month, idx.day,
+                             getattr(idx, "hour", 0),
+                             getattr(idx, "minute", 0),
+                             getattr(idx, "second", 0),
+                             tzinfo=dt_tz.utc).timestamp()
+                )
+                if lo <= ts <= hi:
+                    rows.append({
+                        "timestamp": ts,
+                        "open":  float(row["Open"]),
+                        "high":  float(row["High"]),
+                        "low":   float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": int(row.get("Volume", 0) or 0),
+                    })
 
         if limit and len(rows) > limit:
             rows = rows[-limit:]
@@ -267,8 +316,6 @@ async def get_forex_history(
 
     except Exception as e:
         return {"error": str(e), "trace": traceback.format_exc()}
-
-
 
     
 async def get_user_forex_balance(uid: str) -> dict:
@@ -335,3 +382,45 @@ async def forex_trade(symbol: str, action: str, quantity: int, price: float, use
         print("❌ Backend trade error:", e)
         traceback.print_exc()
         return {"error": str(e), "trace": traceback.format_exc()}
+    
+_INTERNAL_KEYS = {"1","5","15","30","60","120","240","D","W","M"}
+
+def _normalize_resolution_to_internal(res: str) -> str:
+    r = res.upper()
+    if r in _INTERNAL_KEYS:
+        return r
+    if r in {"DY"}: 
+        return "D"
+    return {
+        "1M":"1","5M":"5","15M":"15","30M":"30","60M":"60",
+        "1D":"D","1WK":"W","1MO":"M"
+    }.get(r, "D")
+
+async def get_forex_history_db(
+    base: str,
+    resolution: str,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+    limit: int = 500,
+) -> dict:
+    key = _normalize_resolution_to_internal(resolution)
+    base = base.strip().upper()
+
+    def fetch():
+        return forex_histories_collection.find_one({"symbol": base})
+
+    doc = await asyncio.to_thread(fetch)
+    if not doc or "histories" not in doc or key not in doc["histories"]:
+        return {"symbol": f"{base}", "resolution": key, "history": []}
+
+    candles = doc["histories"].get(key, [])
+    # optional range trimming
+    if start_ts is not None or end_ts is not None:
+        st = start_ts if start_ts is not None else -10**15
+        en = end_ts   if end_ts   is not None else  10**15
+        candles = [c for c in candles if st <= int(c["timestamp"]) <= en]
+
+    if limit and len(candles) > limit:
+        candles = candles[-limit:]
+
+    return {"symbol": base, "resolution": key, "history": candles}

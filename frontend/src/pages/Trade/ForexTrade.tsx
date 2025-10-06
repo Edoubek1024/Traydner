@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { fetchForexPrice, ForexHistory, fetchForexHistory, fetchForexBalances, ForexBalances, fetchMarketStatus } from "../../api/forex";
+import { fetchForexPrice, ForexHistory, fetchForexBalances, ForexBalances, fetchMarketStatus, fetchForexHistoryDb } from "../../api/forex";
 import { FOREX_SYMBOLS, ForexTicker, getForexDisplayName } from "../../config/forexConfig";
 import { auth } from "../../firebase/firebaseConfig";
 import { onIdTokenChanged } from "firebase/auth";
@@ -8,14 +8,14 @@ import ConfirmTradeModal from "../../components/Modals/ConfirmTradeModal";
 
 type RangeKey = "1D" | "1W" | "1M" | "3M" | "YTD" | "1Y" | "5Y";
 
-const RANGE_META: Record<RangeKey, { res: string }> = {
-  "1D": { res: "1" },   // backend maps "1" -> 1m
-  "1W": { res: "15" },  // backend maps "15" -> 15m
-  "1M": { res: "60" },  // backend maps "60" -> 60m
-  "3M": { res: "240" },
-  "YTD": { res: "DY" }, // backend maps "DY" -> 1d_ytd
-  "1Y": { res: "D" },   // backend maps "D" -> 1d
-  "5Y": { res: "W" },   // backend maps "W" -> 1wk
+const RANGE_META: Record<RangeKey, { res: string; slice?: number | null }> = {
+  "1D":  { res: "5",   slice: 288 }, // 24h * 60m
+  "1W":  { res: "30",  slice: 336  }, // 7d * 24h * (60/15)
+  "1M":  { res: "120",  slice: 360  }, // 30d * 24h
+  "3M":  { res: "240", slice: 540  }, // 90d * 24h / 4h
+  "YTD": { res: "D",   slice: 366  }, // safety cap
+  "1Y":  { res: "D",   slice: 366  },
+  "5Y":  { res: "W",   slice: 260  },
 };
 
 const ForexTrade = () => {
@@ -90,91 +90,114 @@ const ForexTrade = () => {
   }, [selectedSymbol]);
 
   useEffect(() => {
-  let ignore = false;
-  const cacheKey = `${selectedSymbol}|${range}`;
+    let cancelled = false;
+    let priceInterval: number | undefined;
+    let minuteTimeout: number | undefined;
+    let minuteInterval: number | undefined;
 
-  async function loadSelectedHistory() {
-    if (history[cacheKey]?.history?.length) return;
+    const fetchPrice = async () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      try {
+        const p = await fetchForexPrice(selectedSymbol);
+        if (!cancelled) setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
+      } catch {}
+    };
 
-    setHistoryLoading(true);
-    try {
-      const { res } = RANGE_META[range];
-      const data = await fetchForexHistory(selectedSymbol, res);
+    // <-- Only this function controls historyLoading
+    const refreshHistory = async () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      setHistoryLoading(true);
+      try {
+        const isOpen = await fetchMarketStatus();
+        if (!cancelled) setMarketOpen(isOpen);
 
-      let candles = data.history ?? [];
+        const now = Math.floor(Date.now() / 1000);
+        let candles: any[] = [];
 
-      const toSec = (t: number) => (t > 1e12 ? Math.floor(t / 1000) : t);
+        if (range === "1D") {
+          const data = await fetchForexHistoryDb(selectedSymbol, "5", { limit: 288 });
+          candles = data.history ?? [];
+        } else if (range === "3M") {
+          const data = await fetchForexHistoryDb(selectedSymbol, "240", { limit: 540 });
+          candles = data.history ?? [];
+        } else if (range === "5Y") {
+          const data = await fetchForexHistoryDb(selectedSymbol, "W", { limit: RANGE_META["5Y"].slice ?? 260 });
+          candles = data.history ?? [];
+        } else {
+          const { res, slice } = RANGE_META[range];
+          let start: number | undefined;
+          if (range === "1W")  start = now - 7  * 24 * 60 * 60;
+          else if (range === "1M")  start = now - 30 * 24 * 60 * 60;
+          else if (range === "YTD") start = Math.floor(Date.UTC(new Date().getUTCFullYear(),0,1)/1000);
+          else if (range === "1Y") {
+            start = Math.floor(Date.UTC(
+              new Date().getUTCFullYear()-1,
+              new Date().getUTCMonth(),
+              new Date().getUTCDate(), 0,0,0
+            ) / 1000);
+          }
 
-      if (range === "1D") {
-        const nowSec = Math.floor(Date.now() / 1000);
-        const cutoff = nowSec - 24 * 60 * 60; // last 24h
-        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
+          const data = await fetchForexHistoryDb(selectedSymbol, res, {
+            start,
+            end: now,
+            limit: slice ?? 500,
+          });
+          candles = data.history ?? [];
+        }
+
+        const max = RANGE_META[range].slice ?? 0;
+        if (max && candles.length > max) candles = candles.slice(-max);
+
+        const cacheKey = `${selectedSymbol}|${range}`;
+        if (!cancelled) {
+          setHistory(prev => ({
+            ...prev,
+            [cacheKey]: {
+              symbol: selectedSymbol,
+              resolution: RANGE_META[range].res,
+              history: candles,
+            },
+          }));
+        }
+      } catch (err) {
+        console.error("History refresh failed:", err);
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
       }
-      if (range === "1W") {
-        const nowSec = Math.floor(Date.now() / 1000);
-        const cutoff = nowSec - 7 * 24 * 60 * 60; // last 7 days
-        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
-      }
-      if (range === "1M") {
-        const nowSec = Math.floor(Date.now() / 1000);
-        const cutoff = nowSec - 30 * 24 * 60 * 60; // last 30 days
-        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
-      }
-      if (range === "3M") {
-        const nowSec = Math.floor(Date.now() / 1000);
-        const cutoff = nowSec - 90 * 24 * 60 * 60; // last 90 days
-        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
-      }
-      if (range === "YTD") {
-        const now = new Date();
-        const jan1UtcSec = Math.floor(Date.UTC(now.getUTCFullYear(), 0, 1, 0, 0, 0) / 1000);
-        candles = candles.filter(c => toSec(c.timestamp) >= jan1UtcSec);
-      }
-      if (range === "1Y") {
-        const now = new Date();
-        const cutoff = Math.floor(
-          Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0) / 1000
-        );
-        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
-      }
-      if (range === "5Y") {
-        const now = new Date();
-        const cutoff = Math.floor(
-          Date.UTC(now.getUTCFullYear() - 5, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0) / 1000
-        );
-        candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
-      }
+    };
 
-      const trimmed: ForexHistory = { ...data, history: candles };
+    // Kick off immediately
+    fetchPrice();
+    refreshHistory();
 
-      if (!ignore) setHistory(prev => ({ ...prev, [cacheKey]: trimmed }));
-    } catch (err) {
-      if (!ignore) {
-        console.error(`Error fetching history for ${selectedSymbol} (${range}):`, err);
-        setHistory(prev => ({ ...prev, [cacheKey]: null }));
-      }
-    } finally {
-      if (!ignore) setHistoryLoading(false);
-    }
-  }
+    // Price every 20s
+    priceInterval = window.setInterval(fetchPrice, 20_000);
 
-  loadSelectedHistory();
-  return () => { ignore = true; };
-}, [selectedSymbol, range]);
-
-
-  function scheduleEveryMinute(callback: () => void) {
-    const now = new Date();
-    const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
-
-    const timeout = setTimeout(() => {
-      callback();
-      const interval = setInterval(callback, 60 * 1000);
-      return () => clearInterval(interval);
+    // History: align to top-of-minute
+    const nowDate = new Date();
+    const msUntilNextMinute = (60 - nowDate.getSeconds()) * 1000 - nowDate.getMilliseconds();
+    minuteTimeout = window.setTimeout(() => {
+      refreshHistory();                          // refreshHistory toggles loading itself
+      minuteInterval = window.setInterval(refreshHistory, 60_000);
     }, msUntilNextMinute);
 
-    return () => clearTimeout(timeout);
-  }
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        fetchPrice();
+        // If you want: refresh immediately when tab becomes visible
+        // refreshHistory();
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+
+    return () => {
+      cancelled = true;
+      if (priceInterval) clearInterval(priceInterval);
+      if (minuteTimeout) clearTimeout(minuteTimeout);
+      if (minuteInterval) clearInterval(minuteInterval);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [selectedSymbol, range]);
 
   async function refreshBalances() {
     try {
@@ -250,40 +273,6 @@ const ForexTrade = () => {
 
     setConfirmOpen(true);
   };
-
-  useEffect(() => {
-    let cleanup: (() => void) | null = null;
-
-    async function refresh() {
-      try {
-        const isOpen = await fetchMarketStatus();
-        setMarketOpen(isOpen);
-
-        const p = await fetchForexPrice(selectedSymbol);
-        setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
-
-        const cacheKey = `${selectedSymbol}|${range}`;
-        const { res } = RANGE_META[range];
-
-        if (range === "1D") {
-          const data = await fetchForexHistory(selectedSymbol, res);
-          setHistory(prev => ({
-            ...prev,
-            [cacheKey]: { ...data, history: data.history ?? [] },
-          }));
-        }
-      } catch (err) {
-        console.error("Minute refresh failed:", err);
-      }
-    }
-
-    cleanup = scheduleEveryMinute(refresh);
-    refresh();
-
-    return () => {
-      if (cleanup) cleanup();
-    };
-  }, [selectedSymbol, range]);
 
   const RangeButton = ({ value, label }: { value: RangeKey; label: string }) => (
     <button

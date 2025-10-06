@@ -16,3 +16,10 @@ CRYPTO_SYMBOLS = [
   "MATIC", "LINK", "LTC", "SHIB", "BCH",
   "XLM", "UNI", "ATOM", "ETC", "APT"
 ]
+
+FOREX_SYMBOLS = [
+  "EUR", "JPY", "GBP", "AUD", "NZD",
+  "CNY", "HKD", "SGD", "INR", "MXN",
+  "PHP", "IDR", "THB", "MYR", "ZAR",
+  "RUB"
+]

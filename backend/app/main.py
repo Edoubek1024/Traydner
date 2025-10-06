@@ -3,12 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import stock_routes, user_routes, crypto_routes, forex_routes
 from app.firebase.firebase_setup import *
 
-from app.services.stock_updater import run_stock_price_loop
-from app.services.crypto_updater import run_crypto_price_loop
-from app.services.forex_updater import run_forex_price_loop
+from app.services.stock_updater import run_stock_price_loop, run_stock_history_loop
+from app.services.crypto_updater import run_crypto_price_loop, run_crypto_history_loop
+from app.services.forex_updater import run_forex_price_loop, run_forex_history_loop
 import threading
 from contextlib import asynccontextmanager
-from app.core.symbols import CRYPTO_SYMBOLS
+from app.core.symbols import CRYPTO_SYMBOLS, STOCK_SYMBOLS, FOREX_SYMBOLS
+import asyncio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,6 +26,12 @@ async def lifespan(app: FastAPI):
     )
     crypto_thread.start()
     print("✅ Background crypto price updater started.")
+
+    loop = asyncio.get_event_loop()
+    loop.create_task(run_stock_history_loop(STOCK_SYMBOLS))
+    loop.create_task(run_crypto_history_loop(CRYPTO_SYMBOLS))
+    loop.create_task(run_forex_history_loop(FOREX_SYMBOLS))
+    print("✅ Background stock & crypto history updaters started.")
 
     forex_stop = threading.Event()
     forex_thread = threading.Thread(

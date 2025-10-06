@@ -1,53 +1,61 @@
-import { fetchStockPrice, fetchStockHistory, StockHistory, fetchMarketStatus } from "../../api/stocks";
+// src/pages/Stocks/StockTrade.tsx
 import { useState, useEffect } from "react";
-import { auth } from "../../firebase/firebaseConfig";
-import { SYMBOLS, getStockDisplayName, Ticker } from "../../config/stocksConfig";
-import { fetchStockBalances, StockBalances } from "../../api/stocks";
 import { onIdTokenChanged } from "firebase/auth";
+import { auth } from "../../firebase/firebaseConfig";
+
+import {
+  fetchStockPrice,
+  fetchMarketStatus,
+  fetchStockBalances,
+  fetchStockHistoryDb,
+  type StockBalances,
+  type StockHistory,
+} from "../../api/stocks";
+
+import {
+  SYMBOLS,
+  getStockDisplayName,
+  type Ticker,
+} from "../../config/stocksConfig";
+
 import HistoryChart from "../../components/Charts/HistoryChart";
 import ConfirmTradeModal from "../../components/Modals/ConfirmTradeModal";
 
 type RangeKey = "1D" | "1W" | "1M" | "3M" | "YTD" | "1Y" | "5Y";
 
 const RANGE_META: Record<RangeKey, { res: string; slice?: number | null }> = {
-  "1D": { res: "1",  slice: 389 },
-  "1W": { res: "5", slice: 390  },
-  "1M": { res: "30",  slice: null  },
-  "3M": { res: "60",  slice: null  },
-  "YTD":{ res: "D",  slice: null },
-  "1Y": { res: "D",  slice: null },
-  "5Y": { res: "W",  slice: 260 },
+  "1D":  { res: "1",   slice: 390 },
+  "1W":  { res: "5",   slice: 390 },
+  "1M":  { res: "30",  slice: 286 },
+  "3M":  { res: "60",  slice: 429 },
+  "YTD": { res: "D",   slice: 251 },
+  "1Y":  { res: "D",   slice: 251 },
+  "5Y":  { res: "W",   slice: 260 },
 };
-
-const toSec = (t: number) => (t > 1e12 ? Math.floor(t / 1000) : t);
-
-const dateKeyET = (tsSec: number) =>
-  new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(tsSec * 1000));
 
 const StockTrade = () => {
   const [symbols] = useState<Ticker[]>(SYMBOLS);
 
   const [selectedSymbol, setSelectedSymbol] = useState<string>("AAPL");
+  const [range, setRange] = useState<RangeKey>("1D");
+
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [history, setHistory] = useState<Record<string, StockHistory | null>>({});
   const [balances, setBalances] = useState<StockBalances | null>(null);
+
+  const [marketOpen, setMarketOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
   const [tradeAction, setTradeAction] = useState<"buy" | "sell">("buy");
   const [quantity, setQuantity] = useState<number>(0);
-  const [marketOpen, setMarketOpen] = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [range, setRange] = useState<RangeKey>("1D");
 
+  // --- Market status once on mount (initial paint)
   useEffect(() => {
     (async () => {
       try {
@@ -59,124 +67,97 @@ const StockTrade = () => {
     })();
   }, []);
 
+  // --- Initial price fetch when symbol changes (for first render)
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       try {
         const p = await fetchStockPrice(selectedSymbol);
-        if (!cancelled) {
-          setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
-        }
+        if (!cancelled) setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
       } catch {
-        if (!cancelled) {
-          setPrices(prev => ({ ...prev, [selectedSymbol]: NaN }));
-        }
+        if (!cancelled) setPrices(prev => ({ ...prev, [selectedSymbol]: NaN }));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-
     return () => { cancelled = true; };
   }, [selectedSymbol]);
 
-  useEffect(() => {
-    let cancelled = false;
-    let intervalId: number | null = null;
-    let inFlight = false;
-
-    const shouldPoll = () =>
-      document.visibilityState === "visible" && marketOpen !== false && !!selectedSymbol;
-
-    const tick = async () => {
-      if (inFlight || !shouldPoll()) return;
-      inFlight = true;
-      try {
-        const p = await fetchStockPrice(selectedSymbol);
-        if (!cancelled) {
-          setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
-        }
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    tick();
-    intervalId = window.setInterval(tick, 20000);
-
-    const onVis = () => { if (shouldPoll()) tick(); };
-    document.addEventListener("visibilitychange", onVis);
-
-    return () => {
-      cancelled = true;
-      if (intervalId) clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, [selectedSymbol, marketOpen]);
-
+  // --- Load initial candles for selected symbol/range (from DB)
   useEffect(() => {
     let ignore = false;
     const cacheKey = `${selectedSymbol}|${range}`;
 
     async function loadSelectedHistory() {
-      if (history[cacheKey]?.history?.length) return;
+      if (history[cacheKey]?.history?.length) return; // use cache on first show
 
       setHistoryLoading(true);
       try {
-        const { res, slice } = RANGE_META[range];
-        const data = await fetchStockHistory(selectedSymbol, res);
+        const now = Math.floor(Date.now() / 1000);
+        let candles: any[] = [];
 
-        let candles = data.history ?? [];
         if (range === "1D") {
-          const daily = await fetchStockHistory(selectedSymbol, "D");
+          // Snap to most recent trading day (ET midnight) via D bucket
+          const daily = await fetchStockHistoryDb(selectedSymbol, "D", { limit: 1 });
           const lastDaily = daily.history?.[daily.history.length - 1];
-          if (lastDaily) {
-            const target = dateKeyET(toSec(lastDaily.timestamp));
-            candles = candles.filter(c => dateKeyET(toSec(c.timestamp)) === target);
+          if (lastDaily?.timestamp) {
+            const dayStart = Number(lastDaily.timestamp);
+            const dayEnd = dayStart + 86400;
+            const data = await fetchStockHistoryDb(selectedSymbol, "1", {
+              start: dayStart,
+              end: dayEnd,
+              limit: RANGE_META["1D"].slice ?? 390,
+            });
+            candles = data.history ?? [];
+          } else {
+            candles = [];
           }
-        }
-        if (range === "1W") {
-          const nowSec = Math.floor(Date.now() / 1000);
-          const cutoff = nowSec - 7 * 24 * 60 * 60;
-          candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
-        }
-        if (range === "1M") {
-          const THIRTY_DAYS = 30 * 24 * 60 * 60;
-          const nowSec = Math.floor(Date.now() / 1000);
-          const cutoff = nowSec - THIRTY_DAYS;
-          candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
-        }
-        if (range === "3M") {
-          const now = new Date();
-          const startUtcMs = Date.UTC(
-            now.getUTCFullYear(),
-            now.getUTCMonth() - 3,
-            now.getUTCDate(),
-            0, 0, 0
-          );
-          const cutoff = Math.floor(startUtcMs / 1000);
-          candles = candles.filter(c => toSec(c.timestamp) >= cutoff);
-        }
-        if (range === "YTD") {
-          const now = new Date();
-          const jan1UtcSec = Math.floor(Date.UTC(now.getUTCFullYear(), 0, 1, 0, 0, 0) / 1000);
-          candles = candles.filter(c => toSec(c.timestamp) >= jan1UtcSec);
-        }
-        if (range === "1Y") {
-          const now = new Date();
-          const startUtcSec = Math.floor(
-            Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), now.getUTCDate(), 0, 0, 0) / 1000
-          );
-          candles = candles.filter(c => toSec(c.timestamp) >= startUtcSec);
-        }
-        if (typeof slice === "number" && slice > 0 && candles.length > slice) {
-          candles = candles.slice(-slice);
+        } else if (range === "3M") {
+          // Latest 60m candles; avoid calendar drift
+          const data = await fetchStockHistoryDb(selectedSymbol, "60", {
+            limit: RANGE_META["3M"].slice ?? 378,
+          });
+          candles = data.history ?? [];
+        } else if (range === "5Y") {
+          // Latest weekly candles; avoid calendar drift
+          const data = await fetchStockHistoryDb(selectedSymbol, "W", {
+            limit: RANGE_META["5Y"].slice ?? 260,
+          });
+          candles = data.history ?? [];
+        } else {
+          // Windowed ranges
+          const { res, slice } = RANGE_META[range];
+          let start: number | undefined;
+          if (range === "1W")  start = now - 7  * 24 * 60 * 60;
+          else if (range === "1M")  start = now - 30 * 24 * 60 * 60;
+          else if (range === "YTD") start = Math.floor(Date.UTC(new Date().getUTCFullYear(), 0, 1) / 1000);
+          else if (range === "1Y")
+            start = Math.floor(
+              Date.UTC(
+                new Date().getUTCFullYear() - 1,
+                new Date().getUTCMonth(),
+                new Date().getUTCDate(),
+                0, 0, 0
+              ) / 1000
+            );
+
+          const data = await fetchStockHistoryDb(selectedSymbol, res, {
+            start,
+            end: now,
+            limit: slice ?? 500,
+          });
+          candles = data.history ?? [];
         }
 
-        const trimmed: StockHistory = { ...data, history: candles };
+        // final clamp
+        const max = RANGE_META[range].slice ?? 0;
+        if (max && candles.length > max) candles = candles.slice(-max);
 
         if (!ignore) {
-          setHistory(prev => ({ ...prev, [cacheKey]: trimmed }));
+          setHistory(prev => ({
+            ...prev,
+            [cacheKey]: { symbol: selectedSymbol, resolution: RANGE_META[range].res, history: candles },
+          }));
         }
       } catch (err) {
         if (!ignore) {
@@ -189,27 +170,136 @@ const StockTrade = () => {
     }
 
     loadSelectedHistory();
-    return () => { ignore = true; };
-  }, [selectedSymbol, range]);
+    // NOTE: do not include `history` in deps; we guard with cacheKey check
+  }, [selectedSymbol, range]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function scheduleEveryMinute(callback: () => void) {
-    const now = new Date();
-    const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+  // --- ONE consolidated refresher: price (20s) + history (minute-aligned)
+  useEffect(() => {
+    let cancelled = false;
+    let priceInterval: number | undefined;
+    let minuteTimeout: number | undefined;
+    let minuteInterval: number | undefined;
 
-    const timeout = setTimeout(() => {
-      callback();
-      const interval = setInterval(callback, 60 * 1000);
-      (callback as any)._interval = interval;
-    }, msUntilNextMinute);
+    const fetchPrice = async () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      try {
+        const p = await fetchStockPrice(selectedSymbol);
+        if (!cancelled) setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
+      } catch {}
+    };
 
-    return () => {
-      clearTimeout(timeout);
-      if ((callback as any)._interval) {
-        clearInterval((callback as any)._interval);
+    const refreshHistory = async () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      try {
+        const isOpen = await fetchMarketStatus();
+        if (!cancelled) setMarketOpen(isOpen);
+
+        const now = Math.floor(Date.now() / 1000);
+        let candles: any[] = [];
+
+        if (range === "1D") {
+          const daily = await fetchStockHistoryDb(selectedSymbol, "D", { limit: 1 });
+          const lastDaily = daily.history?.[daily.history.length - 1];
+          if (lastDaily?.timestamp) {
+            const dayStart = Number(lastDaily.timestamp);
+            const dayEnd = dayStart + 86400;
+            const data = await fetchStockHistoryDb(selectedSymbol, "1", {
+              start: dayStart,
+              end: dayEnd,
+              limit: RANGE_META["1D"].slice ?? 390,
+            });
+            candles = data.history ?? [];
+          } else {
+            candles = [];
+          }
+        } else if (range === "3M") {
+          const data = await fetchStockHistoryDb(selectedSymbol, "60", {
+            limit: RANGE_META["3M"].slice ?? 378,
+          });
+          candles = data.history ?? [];
+        } else if (range === "5Y") {
+          const data = await fetchStockHistoryDb(selectedSymbol, "W", {
+            limit: RANGE_META["5Y"].slice ?? 260,
+          });
+          candles = data.history ?? [];
+        } else {
+          const { res, slice } = RANGE_META[range];
+          let start: number | undefined;
+          if (range === "1W")  start = now - 7  * 24 * 60 * 60;
+          else if (range === "1M")  start = now - 30 * 24 * 60 * 60;
+          else if (range === "YTD") start = Math.floor(Date.UTC(new Date().getUTCFullYear(),0,1)/1000);
+          else if (range === "1Y")
+            start = Math.floor(
+              Date.UTC(
+                new Date().getUTCFullYear()-1,
+                new Date().getUTCMonth(),
+                new Date().getUTCDate(),
+                0,0,0
+              ) / 1000
+            );
+
+          const data = await fetchStockHistoryDb(selectedSymbol, res, {
+            start,
+            end: now,
+            limit: slice ?? 500,
+          });
+          candles = data.history ?? [];
+        }
+
+        const max = RANGE_META[range].slice ?? 0;
+        if (max && candles.length > max) candles = candles.slice(-max);
+
+        const cacheKey = `${selectedSymbol}|${range}`;
+        if (!cancelled) {
+          setHistory(prev => ({
+            ...prev,
+            [cacheKey]: {
+              symbol: selectedSymbol,
+              resolution: RANGE_META[range].res,
+              history: candles,
+            },
+          }));
+        }
+      } catch (err) {
+        console.error("History refresh failed:", err);
       }
     };
-  }
 
+    // Kick off immediately
+    fetchPrice();
+    refreshHistory();
+
+    // Price: every 20s
+    priceInterval = window.setInterval(fetchPrice, 20_000);
+
+    // History: align to top-of-minute, then every minute
+    const now = new Date();
+    const msUntilNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+    minuteTimeout = window.setTimeout(() => {
+      refreshHistory();
+      minuteInterval = window.setInterval(refreshHistory, 60_000);
+    }, msUntilNextMinute);
+
+    // Refresh price immediately when tab becomes visible
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        fetchPrice();
+        // If you also want instant history catch-up on focus, uncomment:
+        // refreshHistory();
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+
+    return () => {
+      cancelled = true;
+      if (priceInterval) clearInterval(priceInterval);
+      if (minuteTimeout) clearTimeout(minuteTimeout);
+      if (minuteInterval) clearInterval(minuteInterval);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [selectedSymbol, range]);
+
+  // --- Balances listener
   useEffect(() => {
     const unsub = onIdTokenChanged(auth, async (user) => {
       if (!user) {
@@ -224,7 +314,6 @@ const StockTrade = () => {
         setBalances(null);
       }
     });
-
     return () => unsub();
   }, []);
 
@@ -245,7 +334,6 @@ const StockTrade = () => {
       if (marketOpen === false) throw new Error("Market is closed.");
 
       const idToken = await user.getIdToken();
-
       const price = prices[selectedSymbol];
       if (!Number.isFinite(price)) throw new Error("Price unavailable.");
       if (!quantity || quantity <= 0 || Number.isNaN(quantity)) {
@@ -253,10 +341,12 @@ const StockTrade = () => {
       }
 
       const payload = { symbol: selectedSymbol, action: tradeAction, quantity, price };
-
       const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/stocks/order`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
         body: JSON.stringify(payload),
       });
 
@@ -266,12 +356,13 @@ const StockTrade = () => {
       }
       await res.json();
 
-      // ✅ update holdings immediately
       await refreshBalances();
 
       const actionWord = tradeAction === "buy" ? "bought" : "sold";
       setError(null);
-      setSuccessMessage(`Successfully ${actionWord} ${quantity} ${selectedSymbol} at $${price.toFixed(2)}`);
+      setSuccessMessage(
+        `Successfully ${actionWord} ${quantity} ${selectedSymbol} at $${price.toFixed(2)}`
+      );
     } catch (err: any) {
       const cleaned = (err?.message || "")
         .replace(/^Error:\s*/, "")
@@ -286,7 +377,6 @@ const StockTrade = () => {
   }
 
   const selectedPrice = prices[selectedSymbol];
-  const cacheKey = `${selectedSymbol}|${range}`;
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -299,52 +389,6 @@ const StockTrade = () => {
 
     setConfirmOpen(true);
   };
-
-  useEffect(() => {
-    let cleanup: (() => void) | null = null;
-
-    async function refresh() {
-      try {
-        // market status
-        const isOpen = await fetchMarketStatus();
-        setMarketOpen(isOpen);
-
-        // price
-        const p = await fetchStockPrice(selectedSymbol);
-        setPrices(prev => ({ ...prev, [selectedSymbol]: p }));
-
-        // intraday history
-        if (range === "1D") {
-          const { res } = RANGE_META[range];
-          const data = await fetchStockHistory(selectedSymbol, res);
-
-          // filter to today’s candles
-          const daily = await fetchStockHistory(selectedSymbol, "D");
-          const lastDaily = daily.history?.[daily.history.length - 1];
-          let candles = data.history ?? [];
-          if (lastDaily) {
-            const target = dateKeyET(toSec(lastDaily.timestamp));
-            candles = candles.filter(c => dateKeyET(toSec(c.timestamp)) === target);
-          }
-
-          const cacheKey = `${selectedSymbol}|${range}`;
-          setHistory(prev => ({
-            ...prev,
-            [cacheKey]: { ...data, history: candles },
-          }));
-        }
-      } catch (err) {
-        console.error("Minute refresh failed:", err);
-      }
-    }
-
-    cleanup = scheduleEveryMinute(refresh);
-    refresh();
-
-    return () => {
-      if (cleanup) cleanup();
-    };
-  }, [selectedSymbol, range]);
 
   const RangeButton = ({ value, label }: { value: RangeKey; label: string }) => (
     <button
@@ -408,8 +452,8 @@ const StockTrade = () => {
               <p className="text-lg text-white font-semibold">
                 {balances ? (balances.stocks[selectedSymbol] ?? 0) : "—"}{" "}
                 {balances?.stocks[selectedSymbol] != 1 ? "shares" : "share"} (
-                  {balances && prices[selectedSymbol]
-                    ? `$${(((balances.stocks[selectedSymbol] ?? 0) * (prices[selectedSymbol] ?? 0))).toFixed(2)}`
+                  {balances && selectedPrice
+                    ? `$${(((balances.stocks[selectedSymbol] ?? 0) * selectedPrice)).toFixed(2)}`
                     : "—"}
                 )
               </p>
@@ -448,7 +492,7 @@ const StockTrade = () => {
               <input
                 type="number"
                 min="0"
-                value={quantity}
+                value={Number.isNaN(quantity) ? 0 : quantity}
                 onChange={(e) => setQuantity(parseInt(e.target.value))}
                 className="w-full px-3 py-2 border border-emerald-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent placeholder-gray-400"
                 placeholder="Shares"
@@ -503,7 +547,7 @@ const StockTrade = () => {
           action={tradeAction}
           symbol={selectedSymbol}
           quantity={Number.isNaN(quantity) ? 0 : quantity}
-          price={prices[selectedSymbol]}
+          price={selectedPrice}
           confirming={confirming}
           onCancel={() => setConfirmOpen(false)}
           onConfirm={placeOrder}
@@ -540,8 +584,8 @@ const StockTrade = () => {
             <div>
               <HistoryChart
                 symbol={selectedSymbol}
-                price={prices[selectedSymbol]}
-                candles={history[cacheKey]?.history ?? []}
+                price={selectedPrice}
+                candles={history[`${selectedSymbol}|${range}`]?.history ?? []}
                 yLabel="Price"
                 color="#22c55e"
                 fill="rgba(34,197,94,0.2)"
