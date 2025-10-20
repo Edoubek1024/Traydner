@@ -16,6 +16,7 @@ import Holdings from "./pages/Wallet";
 import HowItWorks from "./pages/HowItWorks";
 import Profile from "./pages/Profile";
 import CreateKey from "./pages/API/CreateKey";
+import RemoteApiDocs from "./pages/API/APIDocumentation";
 
 type RequireAuthProps = {
   user: User | null;
@@ -144,6 +145,14 @@ function App() {
     element={
       <RequireAuth user={user} authReady={authReady}>
         <CreateKey />
+      </RequireAuth>
+    }
+  />
+  <Route
+    path="/api/docs"
+    element={
+      <RequireAuth user={user} authReady={authReady}>
+        <RemoteApiDocs />
       </RequireAuth>
     }
   />
