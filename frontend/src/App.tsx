@@ -15,6 +15,7 @@ import ForexTrade from "./pages/Trade/ForexTrade";
 import Holdings from "./pages/Wallet";
 import HowItWorks from "./pages/HowItWorks";
 import Profile from "./pages/Profile";
+import CreateKey from "./pages/API/CreateKey";
 
 type RequireAuthProps = {
   user: User | null;
@@ -138,6 +139,14 @@ function App() {
       </RequireAuth>
     }
   />
+  <Route
+    path="/api/keys"
+    element={
+      <RequireAuth user={user} authReady={authReady}>
+        <CreateKey />
+      </RequireAuth>
+    }
+  />
 
   <Route path="/how-it-works" element={<HowItWorks />} />
   <Route path="*" element={<NotFound />} />
@@ -149,7 +158,7 @@ function App() {
 
 function NavWrapper({ user }: { user: any }) {
   const location = useLocation();
-  const isOverlay = location.pathname.toLowerCase() === "/home" || location.pathname.toLowerCase() === "/how-it-works";
+  const isOverlay = ["/home", "/how-it-works", "/api/keys"].includes(location.pathname.toLowerCase());
 
   if (user) {
     return <NavBar overlay={isOverlay} />;

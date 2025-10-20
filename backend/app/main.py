@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import stock_routes, user_routes, crypto_routes, forex_routes
+from app.api.routes import stock_routes, user_routes, crypto_routes, forex_routes, api_key_routes, remote_routes
 
 from app.firebase.firebase_setup import init_firebase
 
@@ -75,6 +75,8 @@ app.include_router(stock_routes.router)
 app.include_router(user_routes.router)
 app.include_router(crypto_routes.router)
 app.include_router(forex_routes.router)
+app.include_router(api_key_routes.router)
+app.include_router(remote_routes.router)
 
 
 @app.get("/api/ping")
