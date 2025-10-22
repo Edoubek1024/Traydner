@@ -5,9 +5,9 @@ import asyncio
 
 from app.core.auth_dependencies import get_current_user_from_api_key
 
-from app.services.stock_service import stock_trade, get_current_price, get_stock_history_db
+from app.services.stock_service import stock_trade, get_current_price, get_stock_history_db, is_market_open
 from app.services.crypto_service import crypto_trade, get_crypto_price_db, get_crypto_history_db
-from app.services.forex_service import forex_trade, get_current_forex_price, get_forex_history_db
+from app.services.forex_service import forex_trade, get_current_forex_price, get_forex_history_db, get_forex_market_status
 
 from app.services.stock_updater import ensure_stock_histories
 from app.services.crypto_updater import ensure_crypto_histories
@@ -288,3 +288,44 @@ async def admin_reinit_histories(
         "purged": purged_summary if force else {},
         "summary": results,
     }
+
+@router.get("/market_status")
+async def get_market_status(
+    symbol: Optional[str] = Query(None, description="e.g. AAPL, BTC-USD, EUR"),
+    market: Optional[str] = Query(None, description="stock | crypto | forex"),
+    _user = Depends(get_current_user_from_api_key),
+):
+    """
+    Returns {"isOpen": bool} for the given symbol or market.
+    - If `symbol` is provided, infer market from your symbol lists (symbol wins if both given).
+    - Otherwise, use `market` directly (expects: stock | crypto | forex, case-insensitive).
+    """
+    resolved_market = None
+
+    if symbol:
+        sym = symbol.upper()
+        if sym in STOCK_SYMBOLS:
+            resolved_market = "stock"
+        elif sym in CRYPTO_SYMBOLS:
+            resolved_market = "crypto"
+        elif sym in FOREX_SYMBOLS:
+            resolved_market = "forex"
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown symbol: {sym}")
+    else:
+        if not market:
+            raise HTTPException(status_code=400, detail="Provide either symbol or market")
+        m = market.strip().lower()
+        if m not in ("stock", "crypto", "forex"):
+            raise HTTPException(status_code=400, detail="market must be one of: stock | crypto | forex")
+        resolved_market = m
+
+    # Compute open/closed
+    if resolved_market == "stock":
+        status = await is_market_open()
+        return {"isOpen": bool(status.get("isOpen", False))}
+    elif resolved_market == "forex":
+        status = await get_forex_market_status()
+        return {"isOpen": bool(status.get("isOpen", False))}
+    else:  # crypto
+        return {"isOpen": True}
