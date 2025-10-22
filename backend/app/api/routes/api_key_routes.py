@@ -50,7 +50,7 @@ async def get_current_user_uid(authorization: Optional[str] = Header(None),
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                                 detail="Server not configured to verify Firebase tokens.")
         try:
-            decoded = firebase_auth.verify_id_token(token)  # may raise
+            decoded = firebase_auth.verify_id_token(token)
             uid = decoded.get("uid")
             if not uid:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,

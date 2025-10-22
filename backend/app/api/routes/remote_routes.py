@@ -1,11 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from typing import Optional, Any, Dict, Tuple
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body
+from typing import Optional, Any, Dict, Tuple, List, Literal
 import time
+import asyncio
 
 from app.core.auth_dependencies import get_current_user_from_api_key
+
 from app.services.stock_service import stock_trade, get_current_price, get_stock_history_db
 from app.services.crypto_service import crypto_trade, get_crypto_price_db, get_crypto_history_db
 from app.services.forex_service import forex_trade, get_current_forex_price, get_forex_history_db
+
+from app.services.stock_updater import ensure_stock_histories
+from app.services.crypto_updater import ensure_crypto_histories
+from app.services.forex_updater import ensure_forex_histories
+
+from app.db.mongo import stock_histories_collection, crypto_histories_collection, forex_histories_collection
+
 from app.services.user_service import get_user_balance
 from app.core.symbols import STOCK_SYMBOLS, CRYPTO_SYMBOLS, FOREX_SYMBOLS
 
@@ -185,4 +194,87 @@ async def get_history(
         "history": candles,
         "source": data.get("source", "mongo"),
         "updatedAt": data.get("updatedAt"),
+    }
+
+
+@router.post("/reinit_histories")
+async def admin_reinit_histories(
+    market: Literal["all", "stock", "crypto", "forex"] = Body("all"),
+    symbols: Optional[List[str]] = Body(None, description="Subset for the chosen market; defaults to all."),
+    force: bool = Body(False, description="If true, delete existing histories before ensuring."),
+    _user = Depends(get_current_user_from_api_key),
+):
+    # ---- admin check (email) ----
+    email = str(_user.get("email") or _user.get("user_email") or _user.get("mail") or "").strip().lower()
+    if email != "doubek.evan@gmail.com":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    # ---- choose symbol lists per market ----
+    todo: list[tuple[str, list[str]]] = []
+
+    if market in ("all", "stock"):
+        stock_list = [s.upper() for s in (symbols if (symbols and market != "all") else STOCK_SYMBOLS)]
+        todo.append(("stock", stock_list))
+
+    if market in ("all", "crypto"):
+        crypto_list = [s.upper() for s in (symbols if (symbols and market != "all") else CRYPTO_SYMBOLS)]
+        todo.append(("crypto", crypto_list))
+
+    if market in ("all", "forex"):
+        forex_list = [s.upper() for s in (symbols if (symbols and market != "all") else FOREX_SYMBOLS)]
+        todo.append(("forex", forex_list))
+
+    # ---- optional: purge existing docs when force=True ----
+    async def _purge(mkt: str, syms: List[str]) -> int:
+        if not syms:
+            return 0
+        filt = {"symbol": {"$in": syms}}
+        if mkt == "stock":
+            res = await asyncio.to_thread(stock_histories_collection.delete_many, filt)
+        elif mkt == "crypto":
+            res = await asyncio.to_thread(crypto_histories_collection.delete_many, filt)
+        elif mkt == "forex":
+            res = await asyncio.to_thread(forex_histories_collection.delete_many, filt)
+        else:
+            return 0
+        # some drivers use res.deleted_count; guard just in case
+        return int(getattr(res, "deleted_count", 0))
+
+    purged_summary = {}
+    if force:
+        for mkt, syms in todo:
+            purged = await _purge(mkt, syms)
+            purged_summary[mkt] = purged
+
+    # ---- run ensures (with a small concurrency guard) ----
+    sem = asyncio.Semaphore(8)
+
+    async def _guarded(coro):
+        async with sem:
+            return await coro
+
+    tasks = []
+    for mkt, lst in todo:
+        if mkt == "stock":
+            tasks.append(asyncio.create_task(_guarded(ensure_stock_histories(lst))))
+        elif mkt == "crypto":
+            tasks.append(asyncio.create_task(_guarded(ensure_crypto_histories(lst))))
+        elif mkt == "forex":
+            tasks.append(asyncio.create_task(_guarded(ensure_forex_histories(lst))))
+
+    results = {}
+    runs = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for (mkt, lst), outcome in zip(todo, runs):
+        if isinstance(outcome, Exception):
+            results[mkt] = {"status": "error", "processed": len(lst), "error": str(outcome)}
+        else:
+            results[mkt] = {"status": "ok", "processed": len(lst)}
+
+    return {
+        "status": "completed",
+        "market": market,
+        "force": force,
+        "purged": purged_summary if force else {},
+        "summary": results,
     }
