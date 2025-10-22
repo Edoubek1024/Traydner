@@ -13,7 +13,7 @@ from app.services.stock_updater import ensure_stock_histories
 from app.services.crypto_updater import ensure_crypto_histories
 from app.services.forex_updater import ensure_forex_histories
 
-from app.db.mongo import stock_histories_collection, crypto_histories_collection, forex_histories_collection
+from app.db.mongo import stock_histories_collection, crypto_histories_collection, forex_histories_collection, users_collection
 
 from app.services.user_service import get_user_balance
 from app.core.symbols import STOCK_SYMBOLS, CRYPTO_SYMBOLS, FOREX_SYMBOLS
@@ -196,6 +196,15 @@ async def get_history(
         "updatedAt": data.get("updatedAt"),
     }
 
+async def _get_email_by_uid(uid: str) -> Optional[str]:
+    if not uid:
+        return None
+    doc = await asyncio.to_thread(users_collection.find_one, {"uid": uid})
+    if not doc:
+        return None
+    # normalize common email field names just in case
+    email = doc.get("email") or doc.get("user_email") or doc.get("mail")
+    return str(email).strip().lower() if email else None
 
 @router.post("/reinit_histories")
 async def admin_reinit_histories(
@@ -204,8 +213,9 @@ async def admin_reinit_histories(
     force: bool = Body(False, description="If true, delete existing histories before ensuring."),
     _user = Depends(get_current_user_from_api_key),
 ):
+    uid = str(_user.get("user_uid") or "").strip()
+    email = await _get_email_by_uid(uid)
     # ---- admin check (email) ----
-    email = str(_user.get("email") or _user.get("user_email") or _user.get("mail") or "").strip().lower()
     if email != "doubek.evan@gmail.com":
         raise HTTPException(status_code=403, detail="Admin only")
 
