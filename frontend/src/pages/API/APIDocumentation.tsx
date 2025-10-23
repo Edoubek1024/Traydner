@@ -16,6 +16,19 @@ export default function RemoteApiDocs() {
   const [historySymbol, setHistorySymbol] = useState("AAPL");
   const [historyResolution, setHistoryResolution] = useState("1m");
   const [historyLimit, setHistoryLimit] = useState("50");
+  const [msSymbol, setMsSymbol] = useState("AAPL");
+  const [msMarket, setMsMarket] = useState("");
+  const marketStatusPath = "/api/remote/market_status";
+  const marketStatusQS = useMemo(() => {
+    const usp = new URLSearchParams();
+    if (msSymbol.trim() !== "") {
+      usp.append("symbol", msSymbol.trim());
+    } else if (msMarket !== "") {
+      usp.append("market", msMarket);
+    }
+    const qs = usp.toString();
+    return qs ? `?${qs}` : "";
+  }, [msSymbol, msMarket]);
 
   // Helpers
   const esc = (s: string) => s.replace(/"/g, '\\"');
@@ -77,6 +90,34 @@ export default function RemoteApiDocs() {
   const pyHistory = useMemo(() => (
     `import requests\nurl = "${baseUrl}${historyPath}${historyQS}"\nheaders = {"Authorization": "Bearer ${esc(apiKey)}"}\nr = requests.get(url, headers=headers, timeout=15)\nprint(r.status_code)\nprint(r.text[:1000])`
   ), [baseUrl, historyPath, historyQS, apiKey]);
+
+  const jsMarketStatus = useMemo(() => (
+    `const res = await fetch("${baseUrl}${marketStatusPath}${marketStatusQS}", {
+  headers: { Authorization: "Bearer ${esc(apiKey)}" }
+});
+if (!res.ok) throw new Error(await res.text());
+const data = await res.json();
+console.log(data);`
+  ), [baseUrl, marketStatusPath, marketStatusQS, apiKey]);
+
+  const pyMarketStatus = useMemo(() => (
+    `import requests
+url = "${baseUrl}${marketStatusPath}${marketStatusQS}"
+headers = {"Authorization": "Bearer ${esc(apiKey)}"}
+r = requests.get(url, headers=headers, timeout=10)
+print(r.status_code, r.text)`
+  ), [baseUrl, marketStatusPath, marketStatusQS, apiKey]);
+
+    // Mutually exclusive inputs for market status
+  const onChangeMsSymbol = (v: string) => {
+    setMsSymbol(v);
+    if (v.trim() !== "") setMsMarket(""); // clear market if symbol is set
+  };
+
+  const onChangeMsMarket = (v: string) => {
+    setMsMarket(v);
+    if (v !== "") setMsSymbol(""); // clear symbol if market is chosen
+  };
 
   return (
     <div className="min-h-screen w-full bg-gray-950 text-gray-100">
@@ -208,6 +249,43 @@ export default function RemoteApiDocs() {
             py: pyHistory,
           }}
         />
+        {/* MARKET STATUS */}
+        <EndpointCard
+          title="GET /api/remote/market_status"
+          subtitle="Returns { isOpen: boolean } for a given symbol or market. If both are provided, symbol takes precedence."
+          path="GET /api/remote/market_status"
+          controls={
+            <div className="grid sm:grid-cols-2 gap-3">
+              <LabeledInput
+                label="symbol (optional)"
+                value={msSymbol}
+                onChange={onChangeMsSymbol}
+                placeholder="e.g. AAPL / BTC / EUR"
+              />
+              <LabeledSelect
+                label="market (optional)"
+                value={msMarket}
+                onChange={onChangeMsMarket}
+                options={["", "stock", "crypto", "forex"]}
+              />
+            </div>
+          }
+          params={[
+            { name: "symbol", required: false, desc: "Ticker. If present, it determines the market (overrides 'market')." },
+            { name: "market", required: false, desc: "One of: stock | crypto | forex (case-insensitive)." },
+          ]}
+          response={{
+            code: 200,
+            body: `{
+  "isOpen": true
+}`,
+          }}
+          tabs={{
+            js: jsMarketStatus,
+            py: pyMarketStatus,
+          }}
+        />
+
 
         <footer className="mt-10 text-xs text-gray-500">
           <p>
