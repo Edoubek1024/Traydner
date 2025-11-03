@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 
 // Remote Trading API – Usage Guide (Dark/Emerald)
-// This page documents example calls for: /price, /trade, /balance, /history
+// This page documents example calls for: /price, /trade, /balance, /history, /market_status
 // No live requests are made. Everything is generated locally for copy/paste.
 
 export default function RemoteApiDocs() {
@@ -13,11 +13,15 @@ export default function RemoteApiDocs() {
   const [tradeSymbol, setTradeSymbol] = useState("BTC");
   const [tradeSide, setTradeSide] = useState<"buy" | "sell">("sell");
   const [tradeQty, setTradeQty] = useState("0.5");
+
+  // NOTE: history resolution now supports both canonical keys and aliases — see cheatsheet below.
   const [historySymbol, setHistorySymbol] = useState("AAPL");
-  const [historyResolution, setHistoryResolution] = useState("1m");
+  const [historyResolution, setHistoryResolution] = useState("1m"); // e.g. "1", "1m", "60", "1h", "120", "2h", "D", "1d", "W", "1w", "M", "1M"
   const [historyLimit, setHistoryLimit] = useState("50");
+
   const [msSymbol, setMsSymbol] = useState("AAPL");
   const [msMarket, setMsMarket] = useState("");
+
   const marketStatusPath = "/api/remote/market_status";
   const marketStatusQS = useMemo(() => {
     const usp = new URLSearchParams();
@@ -41,58 +45,103 @@ export default function RemoteApiDocs() {
     return qs ? `?${qs}` : "";
   };
 
-  // --- PRICE EXAMPLES -------------------------------------------------------
+  // --- PRICE ---------------------------------------------------------------
   const pricePath = "/api/remote/price";
   const priceQS = q({ symbol: priceSymbol });
 
-  
   const jsPrice = useMemo(() => (
-    `const res = await fetch("${baseUrl}${pricePath}${priceQS}", {\n  headers: {\n    Authorization: "Bearer ${esc(apiKey)}"\n  }\n});\nif (!res.ok) throw new Error(await res.text());\nconst data = await res.json();\nconsole.log(data);`
+`const res = await fetch("${baseUrl}${pricePath}${priceQS}", {
+  headers: { Authorization: "Bearer ${esc(apiKey)}" }
+});
+if (!res.ok) throw new Error(await res.text());
+const data = await res.json();
+console.log(data);`
   ), [baseUrl, pricePath, priceQS, apiKey]);
 
   const pyPrice = useMemo(() => (
-    `import requests\nurl = "${baseUrl}${pricePath}${priceQS}"\nheaders = {"Authorization": "Bearer ${esc(apiKey)}"}\nr = requests.get(url, headers=headers, timeout=15)\nprint(r.status_code, r.text)`
+`import requests
+url = "${baseUrl}${pricePath}${priceQS}"
+headers = {"Authorization": "Bearer ${esc(apiKey)}"}
+r = requests.get(url, headers=headers, timeout=15)
+print(r.status_code, r.text)`
   ), [baseUrl, pricePath, priceQS, apiKey]);
 
-  // --- TRADE EXAMPLES -------------------------------------------------------
+  // --- TRADE ---------------------------------------------------------------
   const tradePath = "/api/remote/trade";
   const tradeQS = q({ symbol: tradeSymbol, side: tradeSide, quantity: tradeQty });
 
-  
   const jsTrade = useMemo(() => (
-    `const res = await fetch("${baseUrl}${tradePath}${tradeQS}", {\n  method: "POST",\n  headers: { Authorization: "Bearer ${esc(apiKey)}" }\n});\nif (!res.ok) throw new Error(await res.text());\nconst data = await res.json();\nconsole.log(data);`
+`const res = await fetch("${baseUrl}${tradePath}${tradeQS}", {
+  method: "POST",
+  headers: { Authorization: "Bearer ${esc(apiKey)}" }
+});
+if (!res.ok) throw new Error(await res.text());
+const data = await res.json();
+console.log(data);`
   ), [baseUrl, tradePath, tradeQS, apiKey]);
 
   const pyTrade = useMemo(() => (
-    `import requests\nurl = "${baseUrl}${tradePath}${tradeQS}"\nheaders = {"Authorization": "Bearer ${esc(apiKey)}"}\nr = requests.post(url, headers=headers, timeout=20)\nprint(r.status_code)\nprint(r.text)`
+`import requests
+url = "${baseUrl}${tradePath}${tradeQS}"
+headers = {"Authorization": "Bearer ${esc(apiKey)}"}
+r = requests.post(url, headers=headers, timeout=20)
+print(r.status_code)
+print(r.text)`
   ), [baseUrl, tradePath, tradeQS, apiKey]);
 
-  // --- BALANCE EXAMPLES -----------------------------------------------------
+  // --- BALANCE -------------------------------------------------------------
   const balancePath = "/api/remote/balance";
-  
+
   const jsBalance = useMemo(() => (
-    `const res = await fetch("${baseUrl}${balancePath}", {\n  headers: { Authorization: "Bearer ${esc(apiKey)}" }\n});\nif (!res.ok) throw new Error(await res.text());\nconst data = await res.json();\nconsole.log(data);`
+`const res = await fetch("${baseUrl}${balancePath}", {
+  headers: { Authorization: "Bearer ${esc(apiKey)}" }
+});
+if (!res.ok) throw new Error(await res.text());
+const data = await res.json();
+console.log(data);`
   ), [baseUrl, balancePath, apiKey]);
 
   const pyBalance = useMemo(() => (
-    `import requests\nurl = "${baseUrl}${balancePath}"\nheaders = {"Authorization": "Bearer ${esc(apiKey)}"}\nr = requests.get(url, headers=headers, timeout=10)\nprint(r.status_code, r.text)`
+`import requests
+url = "${baseUrl}${balancePath}"
+headers = {"Authorization": "Bearer ${esc(apiKey)}"}
+r = requests.get(url, headers=headers, timeout=10)
+print(r.status_code, r.text)`
   ), [baseUrl, balancePath, apiKey]);
 
-  // --- HISTORY EXAMPLES -----------------------------------------------------
+  // --- HISTORY (with new interval rules) -----------------------------------
   const historyPath = "/api/remote/history";
   const historyQS = q({ symbol: historySymbol, resolution: historyResolution, limit: historyLimit });
 
-  
   const jsHistory = useMemo(() => (
-    `const res = await fetch("${baseUrl}${historyPath}${historyQS}", {\n  headers: { Authorization: "Bearer ${esc(apiKey)}" }\n});\nif (!res.ok) throw new Error(await res.text());\nconst data = await res.json();\nconsole.log(data);`
+`// Resolution supports canonical keys OR aliases (see cheatsheet below).
+// Examples:
+//  "1","5","15","30","60","120","240","D","W","M"
+//  "1m","5m","15m","30m","1h","2h","4h","1d","1w","1M"
+const res = await fetch("${baseUrl}${historyPath}${historyQS}", {
+  headers: { Authorization: "Bearer ${esc(apiKey)}" }
+});
+if (!res.ok) throw new Error(await res.text());
+const data = await res.json();
+console.log(data);`
   ), [baseUrl, historyPath, historyQS, apiKey]);
 
   const pyHistory = useMemo(() => (
-    `import requests\nurl = "${baseUrl}${historyPath}${historyQS}"\nheaders = {"Authorization": "Bearer ${esc(apiKey)}"}\nr = requests.get(url, headers=headers, timeout=15)\nprint(r.status_code)\nprint(r.text[:1000])`
+`# Resolution supports canonical keys OR aliases (see cheatsheet below).
+# Examples:
+#  "1","5","15","30","60","120","240","D","W","M"
+#  "1m","5m","15m","30m","1h","2h","4h","1d","1w","1M"
+import requests
+url = "${baseUrl}${historyPath}${historyQS}"
+headers = {"Authorization": "Bearer ${esc(apiKey)}"}
+r = requests.get(url, headers=headers, timeout=15)
+print(r.status_code)
+print(r.text[:1000])`
   ), [baseUrl, historyPath, historyQS, apiKey]);
 
+  // --- MARKET STATUS -------------------------------------------------------
   const jsMarketStatus = useMemo(() => (
-    `const res = await fetch("${baseUrl}${marketStatusPath}${marketStatusQS}", {
+`const res = await fetch("${baseUrl}${marketStatusPath}${marketStatusQS}", {
   headers: { Authorization: "Bearer ${esc(apiKey)}" }
 });
 if (!res.ok) throw new Error(await res.text());
@@ -101,22 +150,21 @@ console.log(data);`
   ), [baseUrl, marketStatusPath, marketStatusQS, apiKey]);
 
   const pyMarketStatus = useMemo(() => (
-    `import requests
+`import requests
 url = "${baseUrl}${marketStatusPath}${marketStatusQS}"
 headers = {"Authorization": "Bearer ${esc(apiKey)}"}
 r = requests.get(url, headers=headers, timeout=10)
 print(r.status_code, r.text)`
   ), [baseUrl, marketStatusPath, marketStatusQS, apiKey]);
 
-    // Mutually exclusive inputs for market status
+  // Mutually exclusive inputs for market status
   const onChangeMsSymbol = (v: string) => {
     setMsSymbol(v);
-    if (v.trim() !== "") setMsMarket(""); // clear market if symbol is set
+    if (v.trim() !== "") setMsMarket("");
   };
-
   const onChangeMsMarket = (v: string) => {
     setMsMarket(v);
-    if (v !== "") setMsSymbol(""); // clear symbol if market is chosen
+    if (v !== "") setMsSymbol("");
   };
 
   return (
@@ -134,7 +182,9 @@ print(r.status_code, r.text)`
             <LabeledInput label="Base URL" value={baseUrl} onChange={setBaseUrl} placeholder="https://your-host" />
             <LabeledInput label="API Key (Bearer)" value={apiKey} onChange={setApiKey} placeholder="sk_live_..." />
           </div>
-          <p className="mt-3 text-xs text-gray-400">Each snippet includes <code className="text-emerald-400">Authorization</code> header as <code className="text-emerald-400">Bearer</code> token.</p>
+          <p className="mt-3 text-xs text-gray-400">
+            Each snippet includes <code className="text-emerald-400">Authorization</code> header as <code className="text-emerald-400">Bearer</code> token.
+          </p>
         </section>
 
         {/* PRICE */}
@@ -156,10 +206,7 @@ print(r.status_code, r.text)`
   "updatedAt": 1712345678
 }`,
           }}
-          tabs={{
-            js: jsPrice,
-            py: pyPrice,
-          }}
+          tabs={{ js: jsPrice, py: pyPrice }}
         />
 
         {/* TRADE */}
@@ -191,10 +238,7 @@ print(r.status_code, r.text)`
   "result": { /* trade service payload */ }
 }`,
           }}
-          tabs={{
-            js: jsTrade,
-            py: pyTrade,
-          }}
+          tabs={{ js: jsTrade, py: pyTrade }}
         />
 
         {/* BALANCE */}
@@ -209,46 +253,63 @@ print(r.status_code, r.text)`
   "balance": 100000.00
 }`,
           }}
-          tabs={{
-            js: jsBalance,
-            py: pyBalance,
-          }}
+          tabs={{ js: jsBalance, py: pyBalance }}
         />
 
         {/* HISTORY */}
         <EndpointCard
           title="GET /api/remote/history"
-          subtitle="Fetch recent candles for a symbol and resolution."
+          subtitle={
+            <>
+              Fetch recent candles for a symbol and resolution. <br />
+              <span className="text-emerald-300">
+                New interval scheme:
+              </span>{" "}
+              You can pass either <strong>canonical keys</strong> or <strong>aliases</strong> (below). The server
+              normalizes them to canonical keys internally.
+            </>
+          }
           path="GET /api/remote/history"
           controls={<div className="grid sm:grid-cols-3 gap-3">
             <LabeledInput label="symbol" value={historySymbol} onChange={setHistorySymbol} placeholder="AAPL / BTC / EUR" />
-            <LabeledInput label="resolution" value={historyResolution} onChange={setHistoryResolution} placeholder="1m, 5m, 1h, D, W" />
+            <LabeledInput
+              label="resolution"
+              value={historyResolution}
+              onChange={setHistoryResolution}
+              placeholder='Try: "1", "1m", "60", "1h", "120", "2h", "D", "1d", "W", "1w", "M", "1M"'
+            />
             <LabeledInput label="limit" value={historyLimit} onChange={setHistoryLimit} placeholder="50" />
           </div>}
           params={[
-            { name: "symbol", required: true, desc: "Ticker" },
-            { name: "resolution", required: true, desc: "e.g. 1m, 5m, 1h, D, W" },
-            { name: "start_ts", required: false, desc: "Unix seconds (optional)" },
-            { name: "end_ts", required: false, desc: "Unix seconds (optional)" },
-            { name: "limit", required: false, desc: "Max candles (1–5000). Default 500." },
+            { name: "symbol", required: true, desc: "Ticker (stocks/crypto/forex)." },
+            {
+              name: "resolution",
+              required: true,
+              desc:
+                'Canonical: 1,5,15,30,60,120,240,D,W,M • Aliases: "1m","5m","15m","30m","1h","2h","4h","1d","1w","1M".',
+            },
+            { name: "start_ts", required: false, desc: "Unix seconds (optional; inclusive start, exclusive end internally)." },
+            { name: "end_ts", required: false, desc: "Unix seconds (optional; exclusive end)." },
+            { name: "limit", required: false, desc: "Most recent N candles (1–5000). Default 500." },
           ]}
           response={{
             code: 200,
             body: `{
   "symbol": "${historySymbol}",
   "market": "stock|crypto|forex",
-  "resolution": "${historyResolution}",
+  "resolution": "${historyResolution}", // normalized on the server to canonical keys: 1,5,15,30,60,120,240,D,W,M
   "count": ${historyLimit},
   "history": [ { "timestamp": 1712345678, "open": 1, "high": 2, "low": 0.5, "close": 1.8, "volume": 1234 } ],
   "source": "mongo",
   "updatedAt": 1712349999
 }`,
           }}
-          tabs={{
-            js: jsHistory,
-            py: pyHistory,
-          }}
+          tabs={{ js: jsHistory, py: pyHistory }}
         />
+
+        {/* Resolution Cheatsheet */}
+        <ResolutionCheatsheet />
+
         {/* MARKET STATUS */}
         <EndpointCard
           title="GET /api/remote/market_status"
@@ -280,12 +341,8 @@ print(r.status_code, r.text)`
   "isOpen": true
 }`,
           }}
-          tabs={{
-            js: jsMarketStatus,
-            py: pyMarketStatus,
-          }}
+          tabs={{ js: jsMarketStatus, py: pyMarketStatus }}
         />
-
 
         <footer className="mt-10 text-xs text-gray-500">
           <p>
@@ -346,7 +403,7 @@ function EndpointCard({
   tabs,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: React.ReactNode;
   path: string;
   controls?: React.ReactNode;
   params: { name: string; required?: boolean; desc?: string }[];
@@ -454,6 +511,44 @@ function Tabs({
         <button onClick={copy} className="px-3 py-1 rounded border border-emerald-600 text-white text-sm hover:bg-emerald-700">Copy</button>
       </div>
       <pre className="mt-2 p-3 rounded bg-black/70 border border-emerald-800 text-emerald-300 overflow-x-auto whitespace-pre-wrap">{contents[active]}</pre>
+    </div>
+  );
+}
+
+/** Resolution cheatsheet card */
+function ResolutionCheatsheet() {
+  return (
+    <section className="mb-8 p-5 rounded-2xl border border-emerald-800 bg-gray-900 shadow-lg">
+      <h3 className="text-lg font-semibold text-white mb-2">Resolution Cheatsheet</h3>
+      <p className="text-sm text-gray-400 mb-4">
+        You can pass canonical keys <code className="text-emerald-300">1,5,15,30,60,120,240,D,W,M</code> or aliases.
+        The server normalizes aliases to canonical keys.
+      </p>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+        <CheatRow canon="1"   aliases='1m' />
+        <CheatRow canon="5"   aliases='5m' />
+        <CheatRow canon="15"  aliases='15m' />
+        <CheatRow canon="30"  aliases='30m' />
+        <CheatRow canon="60"  aliases='60m, 1h' />
+        <CheatRow canon="120" aliases='120m, 2h' />
+        <CheatRow canon="240" aliases='240m, 4h' />
+        <CheatRow canon="D"   aliases='d, 1d' />
+        <CheatRow canon="W"   aliases='w, 1w' />
+        <CheatRow canon="M"   aliases='m, 1mo' />
+      </div>
+      <ul className="list-disc ml-5 mt-4 text-xs text-gray-400 space-y-1">
+        <li><b>Time window:</b> server applies inclusive <code>start_ts</code> and exclusive <code>end_ts</code> when provided.</li>
+        <li><b>Limit:</b> returns the most recent N candles (default 500).</li>
+        <li><b>Source:</b> histories come from your DB; updaters align to minute boundaries (drift-free).</li>
+      </ul>
+    </section>
+  );
+}
+
+function CheatRow({ canon, aliases }: { canon: string; aliases: string }) {
+  return (
+    <div className="p-3 rounded-xl bg-gray-950 border border-gray-800">
+      <div className="text-gray-300"><span className="text-emerald-300 font-mono">{canon}</span> <span className="text-gray-500">→</span> {aliases}</div>
     </div>
   );
 }
