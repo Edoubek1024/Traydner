@@ -3,6 +3,8 @@ import time
 import httpx
 from datetime import datetime, timezone as dt_tz, timedelta
 from pytz import timezone as pytz_timezone
+from typing import Iterable, List, Dict, Any
+import threading
 
 
 from app.db.mongo import stock_prices_collection, stock_histories_collection
@@ -65,11 +67,88 @@ def update_prices_to_mongo():
     else:
       print(f"❌ Failed to fetch price for {result.get('symbol')}: {result.get('error')}")
 
+def _api_key_for_index(i: int) -> str:
+    return FINNHUB_API_KEYS[i % len(FINNHUB_API_KEYS)]
 
-def run_stock_price_loop(stop_event):
-  while not stop_event.is_set():
-    update_prices_to_mongo()
-    print(f"✅ Updated stock prices at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+def _fetch_quote_sync(client: httpx.Client, symbol: str, api_key: str) -> float | None:
+    url = "https://finnhub.io/api/v1/quote"
+    r = client.get(url, params={"symbol": symbol, "token": api_key})
+    r.raise_for_status()
+    data = r.json()
+    c = data.get("c")
+    if not c:
+        return None
+    return float(c)
+
+def _update_one_symbol_price_sync(client: httpx.Client, symbol: str, api_key: str) -> None:
+    sym = symbol.upper()
+    try:
+        px = _fetch_quote_sync(client, sym, api_key)
+        if px is None:
+            return
+        now = time.time()
+
+        # Optional debounce: only write price if it changed; still bump updatedAt
+        existing = stock_prices_collection.find_one({"symbol": sym}, {"price": 1})
+        if existing and "price" in existing and float(existing["price"]) == px:
+            stock_prices_collection.update_one(
+                {"symbol": sym},
+                {"$set": {"updatedAt": now, "source": "finnhub"}},
+                upsert=True,
+            )
+            return
+
+        stock_prices_collection.update_one(
+            {"symbol": sym},
+            {"$set": {
+                "symbol": sym,
+                "price": px,
+                "source": "finnhub",
+                "updatedAt": now,
+            }},
+            upsert=True,
+        )
+    except Exception as e:
+        print(f"⚠️  Stock price update failed for {sym}: {e}")
+
+
+def run_stock_price_loop(
+    stop_event: threading.Event,
+    symbols: Iterable[str],
+    interval_seconds: int = 5,
+) -> None:
+    """
+    Sync/threaded price loop (like crypto):
+      - reuses one httpx.Client (keep-alive)
+      - round-robins API keys
+      - aligns sleep to the next interval boundary (low drift)
+    """
+    syms: List[str] = [s.upper() for s in symbols]
+
+    timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+    transport = httpx.HTTPTransport(retries=2)
+
+    with httpx.Client(timeout=timeout, transport=transport) as client:
+        # initial alignment to boundary
+        sleep_for = max(0.0, interval_seconds - (time.time() % interval_seconds))
+        stop_event.wait(sleep_for)
+
+        while not stop_event.is_set():
+            try:
+                for i, sym in enumerate(syms):
+                    if stop_event.is_set():
+                        break
+                    _update_one_symbol_price_sync(client, sym, _api_key_for_index(i))
+
+                # align to next boundary
+                now = time.time()
+                sleep_for = max(0.2, interval_seconds - (now % interval_seconds))
+                stop_event.wait(sleep_for)
+                print(f"✅ Updated stock prices at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            except Exception as e:
+                print(f"❌ Stock updater loop error: {e}")
+                # short backoff without losing alignment too much
+                stop_event.wait(2.0)
 
 INCREMENTS = {
     "1": 60,       # 1 minute

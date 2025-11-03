@@ -20,6 +20,26 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
+def _to_seconds(ts: int | None) -> int | None:
+    """
+    Accept ms or seconds from callers and normalize to seconds.
+    """
+    if ts is None:
+        return None
+    ts = int(ts)
+    return ts // 1000 if ts >= 10**12 else ts
+
+def _candle_ts_s(c: dict) -> int:
+    """
+    Robustly read a candle's timestamp as seconds (handles str/float/ms).
+    """
+    ts = c.get("timestamp", 0)
+    try:
+        ts = int(float(ts))
+    except Exception:
+        ts = 0
+    return ts // 1000 if ts >= 10**12 else ts
+
 def _extract_price_from_td(td):
     try:
         fs = td.select_one("fin-streamer")
@@ -169,12 +189,6 @@ async def get_current_forex_price(symbol: str) -> dict:
             "symbol": symbol.upper(),
             "error": "Price not found in database"
         }
-    
-# forex_service.py
-# forex_service.py
-import asyncio
-import traceback
-from datetime import datetime, timezone as dt_tz
 
 async def get_forex_history(
     base: str,
@@ -186,136 +200,140 @@ async def get_forex_history(
     """
     Fetch FX candles from Yahoo via yfinance.
 
-    Supported resolution tokens (case-insensitive):
-      Intraday:  "1m","5m","15m","30m","60m","120m","240m","4h"
-        - 30m will fallback to 15m (or 5m) and be resampled → 30m if native is empty
-        - 120m/240m are resampled from 60m
-      Higher TF: "1d","1d_ytd","1wk"
+    Intraday:  1m,5m,15m,30m,60m,120m(=2h),240m(=4h)
+    Higher TF: 1d, 1wk   (monthly if you want: 1mo)
     """
     try:
         import yfinance as yf
+        import math
 
-        base = base.strip().upper()
+        base = (base or "").strip().upper()
         if len(base) != 3:
             return {"error": f"Invalid base currency: {base}"}
 
+        # Normalize res aliases to internal and then to Yahoo params
+        key = _normalize_resolution_to_internal(resolution)
         ticker = yf.Ticker(f"{base}USD=X")
-
-        # Normalize resolution
-        res = resolution.lower()
-        if res == "4h":
-            res = "240m"
 
         # Period windows that satisfy Yahoo limits for intraday
         PERIOD_FOR = {
-            "1m":  "7d",
-            "5m":  "7d",
-            "15m": "60d",
-            "30m": "60d",
-            "60m": "730d",   # ~2 years
+            "1":   "7d",
+            "5":   "7d",
+            "15":  "60d",
+            "30":  "60d",
+            "60":  "730d",  # ~2 years
         }
 
-        def load_with(period: str | None, interval: str):
-            # Intraday: must use period query
-            if interval.endswith("m"):
+        # Accept ms or s, and build an inclusive start / exclusive end window
+        s = _to_seconds(start_ts) if start_ts is not None else None
+        e = _to_seconds(end_ts)   if end_ts   is not None else None
+        if s is not None and e is not None and e <= s:
+            e = s + 1
+
+        # Decide Yahoo interval from internal key
+        if key in {"1","5","15","30","60"}:
+            interval = f"{key}m"
+            period   = PERIOD_FOR[key]
+
+            def load():
+                # Intraday must use 'period'
                 return ticker.history(period=period, interval=interval)
-            # Daily/weekly: use explicit window if provided, else period
-            if start_ts and end_ts:
-                return ticker.history(
-                    start=datetime.fromtimestamp(start_ts, tz=dt_tz.utc),
-                    end=datetime.fromtimestamp(end_ts, tz=dt_tz.utc),
-                    interval=interval,
-                )
-            return ticker.history(period=period or "1y", interval=interval)
 
-        # ---------- Load DataFrame according to requested res ----------
-        df = None
-        if res in {"1m","5m","15m","30m","60m"}:
-            # Try native first
-            period = PERIOD_FOR[res]
-            df = await asyncio.to_thread(load_with, period, res)
-            # Special fallback: 30m → 15m → 5m (then resample to 30m)
-            if res == "30m" and (df is None or df.empty):
-                for fallback in ("15m", "5m"):
-                    fb_period = PERIOD_FOR[fallback]
-                    df_fb = await asyncio.to_thread(load_with, fb_period, fallback)
-                    if df_fb is not None and not df_fb.empty:
-                        df = df_fb
-                        res = "30m_from_" + fallback  # mark to resample below
-                        break
+            df = await asyncio.to_thread(load)
 
-        elif res in {"120m","240m"}:
+            # Synthetic 120m / 240m can be resampled from 60m path if requested upstream,
+            # but here we only serve native minute keys; resampling handled below if needed.
+
+        elif key in {"120","240"}:
             # Always fetch 60m and resample to 2H/4H
-            df = await asyncio.to_thread(load_with, PERIOD_FOR["60m"], "60m")
+            def load():
+                return ticker.history(period=PERIOD_FOR["60"], interval="60m")
+            df = await asyncio.to_thread(load)
 
-        elif res in {"1d","1d_ytd","1wk"}:
-            period = {"1d": "5y", "1d_ytd": "ytd", "1wk": "10y"}[res]
-            interval = {"1d": "1d", "1d_ytd": "1d", "1wk": "1wk"}[res]
-            df = await asyncio.to_thread(load_with, period, interval)
+        elif key in {"D","W","M"}:
+            interval = {"D": "1d", "W": "1wk", "M": "1mo"}[key]
+            # For daily/weekly/monthly, use start/end if both provided; else use period
+            default_period = {"D": "5y", "W": "10y", "M": "10y"}[key]
+
+            def load():
+                if s is not None and e is not None:
+                    return ticker.history(
+                        start=datetime.utcfromtimestamp(int(s)),
+                        end=datetime.utcfromtimestamp(int(e)),
+                        interval=interval,
+                    )
+                return ticker.history(period=default_period, interval=interval)
+
+            df = await asyncio.to_thread(load)
 
         else:
-            return {"error": f"Unsupported resolution: {resolution}"}
+            return {"error": f"Unsupported resolution: {resolution} (normalized='{key}')"}
 
-        # ---------- Resampling for synthetic intervals ----------
-        if df is not None and not df.empty:
-            # 30m fallback resampling
-            if isinstance(res, str) and res.startswith("30m_from_"):
-                rule = "30T"  # 30 minutes
-                df = df.resample(rule).agg({
-                    "Open":  "first",
-                    "High":  "max",
-                    "Low":   "min",
-                    "Close": "last",
-                    "Volume":"sum",
-                }).dropna()
+        if df is None or df.empty:
+            return {"symbol": f"{base}/USD", "resolution": key, "history": []}
 
-            # 120m / 240m from 60m
-            elif resolution.lower() in {"120m","240m","4h"}:
-                rule = "2H" if resolution.lower() == "120m" else "4H"
-                df = df.resample(rule).agg({
-                    "Open":  "first",
-                    "High":  "max",
-                    "Low":   "min",
-                    "Close": "last",
-                    "Volume":"sum",
-                }).dropna()
+        # If we fetched 60m for resampling (120/240), do it here
+        if key in {"120","240"} and (df is not None and not df.empty):
+            rule = "2H" if key == "120" else "4H"
+            df = df.resample(rule).agg({
+                "Open":  "first",
+                "High":  "max",
+                "Low":   "min",
+                "Close": "last",
+                "Volume":"sum",
+            }).dropna()
 
-        # ---------- Convert to rows ----------
-        rows = []
-        if df is not None and not df.empty:
-            df = df.sort_index()
-            # If caller passed start/end (rare for intraday), filter after resample too
-            lo = start_ts if start_ts is not None else -10**15
-            hi = end_ts   if end_ts   is not None else  10**15
-            for idx, row in df.iterrows():
-                ts = int(idx.timestamp()) if getattr(idx, "tzinfo", None) else int(
-                    datetime(idx.year, idx.month, idx.day,
-                             getattr(idx, "hour", 0),
-                             getattr(idx, "minute", 0),
-                             getattr(idx, "second", 0),
-                             tzinfo=dt_tz.utc).timestamp()
-                )
-                if lo <= ts <= hi:
-                    rows.append({
-                        "timestamp": ts,
-                        "open":  float(row["Open"]),
-                        "high":  float(row["High"]),
-                        "low":   float(row["Low"]),
-                        "close": float(row["Close"]),
-                        "volume": int(row.get("Volume", 0) or 0),
-                    })
+        # Sort and convert to rows with UTC epoch seconds
+        df = df.sort_index()
 
+        rows: list[dict[str, float | int]] = []
+        for idx, row in df.iterrows():
+            # robust UTC epoch
+            ts = int(idx.timestamp()) if getattr(idx, "tzinfo", None) else int(
+                datetime(idx.year, idx.month, idx.day,
+                         getattr(idx, "hour", 0),
+                         getattr(idx, "minute", 0),
+                         getattr(idx, "second", 0),
+                         tzinfo=dt_tz.utc).timestamp()
+            )
+
+            # Apply time window with EXCLUSIVE end if provided
+            if s is not None and ts < s:
+                continue
+            if e is not None and not (ts < e):
+                continue
+
+            vol_raw = row.get("Volume", 0)
+            if isinstance(vol_raw, float) and math.isnan(vol_raw):
+                vol = 0
+            else:
+                try:
+                    vol = int(vol_raw or 0)
+                except Exception:
+                    vol = 0
+
+            rows.append({
+                "timestamp": ts,
+                "open":  float(row["Open"]),
+                "high":  float(row["High"]),
+                "low":   float(row["Low"]),
+                "close": float(row["Close"]),
+                "volume": vol,
+            })
+
+        # Enforce limit (keep most recent N, preserve order)
         if limit and len(rows) > limit:
             rows = rows[-limit:]
 
         return {
             "symbol": f"{base}/USD",
-            "resolution": resolution,
+            "resolution": key,     # return normalized key to match DB
             "history": rows
         }
 
     except Exception as e:
         return {"error": str(e), "trace": traceback.format_exc()}
+
 
     
 async def get_user_forex_balance(uid: str) -> dict:
@@ -332,6 +350,11 @@ async def forex_trade(symbol: str, action: str, quantity: int, price: float, use
             return {"error": "Invalid trade action. Must be 'buy' or 'sell'."}
         if quantity <= 0 or price <= 0:
             return {"error": "Quantity and price must be greater than zero."}
+        
+        market_status = await get_forex_market_status()
+
+        if not market_status["isOpen"]:
+            return {"error": "Forex trades can only be made while the markets are open."}
         
         total_cost = quantity * price
 
@@ -386,15 +409,23 @@ async def forex_trade(symbol: str, action: str, quantity: int, price: float, use
 _INTERNAL_KEYS = {"1","5","15","30","60","120","240","D","W","M"}
 
 def _normalize_resolution_to_internal(res: str) -> str:
-    r = res.upper()
-    if r in _INTERNAL_KEYS:
-        return r
-    if r in {"DY"}: 
-        return "D"
-    return {
-        "1M":"1","5M":"5","15M":"15","30M":"30","60M":"60",
-        "1D":"D","1WK":"W","1MO":"M"
-    }.get(r, "D")
+    r = (res or "").strip().lower()
+    # Minutes
+    if r in {"1","1m","m1"}: return "1"
+    if r in {"5","5m","m5"}: return "5"
+    if r in {"15","15m","m15"}: return "15"
+    if r in {"30","30m","m30"}: return "30"
+    if r in {"60","60m","m60","1h","h1"}: return "60"
+    # Hours
+    if r in {"120","120m","m120","2h","h2"}: return "120"
+    if r in {"240","240m","m240","4h","h4"}: return "240"
+    # Higher TF
+    if r in {"d","1d","day"}: return "D"
+    if r in {"w","1w","wk","1wk","week"}: return "W"
+    if r in {"m","1mo","mo","month","1month"}: return "M"
+    # Fallbacks / legacy
+    if r == "dy": return "D"
+    return r.upper() if r else "D"
 
 async def get_forex_history_db(
     base: str,
@@ -403,23 +434,31 @@ async def get_forex_history_db(
     end_ts: int | None = None,
     limit: int = 500,
 ) -> dict:
-    key = _normalize_resolution_to_internal(resolution)
-    base = base.strip().upper()
+    key  = _normalize_resolution_to_internal(resolution)
+    base = (base or "").strip().upper()
 
     def fetch():
         return forex_histories_collection.find_one({"symbol": base})
 
     doc = await asyncio.to_thread(fetch)
     if not doc or "histories" not in doc or key not in doc["histories"]:
-        return {"symbol": f"{base}", "resolution": key, "history": []}
+        return {"symbol": base, "resolution": key, "history": []}
 
-    candles = doc["histories"].get(key, [])
-    # optional range trimming
+    candles = doc["histories"].get(key, []) or []
+
+    # Ensure ASC
+    if candles:
+        candles = sorted(candles, key=_candle_ts_s)
+
+    # Apply inclusive start / EXCLUSIVE end window (accept ms or s)
     if start_ts is not None or end_ts is not None:
-        st = start_ts if start_ts is not None else -10**15
-        en = end_ts   if end_ts   is not None else  10**15
-        candles = [c for c in candles if st <= int(c["timestamp"]) <= en]
+        s = _to_seconds(start_ts) if start_ts is not None else -10**15
+        e = _to_seconds(end_ts)   if end_ts   is not None else  10**15
+        if e <= s:
+            e = s + 1
+        candles = [c for c in candles if s <= _candle_ts_s(c) < e]
 
+    # Apply limit (most recent N), keep ASC
     if limit and len(candles) > limit:
         candles = candles[-limit:]
 

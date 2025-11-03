@@ -8,7 +8,6 @@ from typing import Iterable, List, Tuple, Dict, Any
 import httpx
 
 from app.db.mongo import crypto_prices_collection, crypto_histories_collection
-from app.core.symbols import CRYPTO_SYMBOLS
 from app.services.crypto_service import get_crypto_history
 
 # ----------------------------- Price Updater ------------------------------
@@ -20,25 +19,36 @@ BINANCE_HOSTS: List[Tuple[str, str]] = [
     ("binance.com", "BUSD"),
 ]
 
-def _fetch_binance_price_sync(symbol: str) -> Tuple[float, str]:
+def _fetch_binance_price_sync(symbol: str, client: httpx.Client) -> Tuple[float, str]:
     sym = symbol.upper()
-    with httpx.Client(timeout=10.0) as client:
-        for host, quote in BINANCE_HOSTS:
-            pair = f"{sym}{quote}"
-            url = f"https://api.{host}/api/v3/ticker/price"
-            try:
-                r = client.get(url, params={"symbol": pair})
-                r.raise_for_status()
-                data = r.json()
-                price = float(data["price"])
-                return price, f"{host}:{pair}"
-            except Exception:
-                continue
+    for host, quote in BINANCE_HOSTS:
+        pair = f"{sym}{quote}"
+        url = f"https://api.{host}/api/v3/ticker/price"
+        try:
+            r = client.get(url, params={"symbol": pair})
+            r.raise_for_status()
+            data = r.json()
+            price = float(data["price"])
+            return price, f"{host}:{pair}"
+        except Exception:
+            continue
     raise RuntimeError(f"No price found for {sym} across hosts/pairs")
 
-def _update_one_symbol(symbol: str) -> None:
-    price, source = _fetch_binance_price_sync(symbol)
+def _update_one_symbol_price(symbol: str, client: httpx.Client) -> None:
+    price, source = _fetch_binance_price_sync(symbol, client)
     now = time.time()
+
+    # Optional: skip price write if unchanged (reduces noisy writes),
+    # still bump updatedAt so readers know the loop is alive.
+    existing = crypto_prices_collection.find_one({"symbol": symbol.upper()}, {"price": 1})
+    if existing and "price" in existing and float(existing["price"]) == price:
+        crypto_prices_collection.update_one(
+            {"symbol": symbol.upper()},
+            {"$set": {"updatedAt": now, "source": source}},
+            upsert=True,
+        )
+        return
+
     crypto_prices_collection.update_one(
         {"symbol": symbol.upper()},
         {"$set": {
@@ -53,26 +63,41 @@ def _update_one_symbol(symbol: str) -> None:
 def run_crypto_price_loop(
     stop_event: threading.Event,
     symbols: Iterable[str],
-    interval_seconds: int = 15
+    interval_seconds: int = 15,
 ) -> None:
+    """
+    Consistent tick loop:
+      - reuse a single HTTP client (low latency, stable DNS/TLS)
+      - align to interval boundary (low drift)
+      - isolate per-symbol errors
+    """
     symbols_up: List[str] = [s.upper() for s in symbols]
+    transport = httpx.HTTPTransport(retries=2)
     backoff = 1
-    while not stop_event.is_set():
-        try:
-            for sym in symbols_up:
-                if stop_event.is_set():
-                    break
-                try:
-                    _update_one_symbol(sym)
-                except Exception as e:
-                    print(f"⚠️  Failed to update {sym}: {e}")
-            backoff = 1
-            stop_event.wait(interval_seconds)
-            print(f"✅ Updated crypto at {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        except Exception as e:
-            print(f"❌ Crypto updater loop error: {e}; backing off {backoff}s")
-            stop_event.wait(backoff)
-            backoff = min(backoff * 2, 60)
+
+    with httpx.Client(timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
+                      transport=transport) as client:
+        while not stop_event.is_set():
+            try:
+                for sym in symbols_up:
+                    if stop_event.is_set():
+                        break
+                    try:
+                        _update_one_symbol_price(sym, client)
+                    except Exception as e:
+                        print(f"⚠️  Failed to update {sym}: {e}")
+
+                backoff = 1
+                # Align to the next interval boundary to avoid drift
+                now = time.time()
+                sleep_for = max(0.2, interval_seconds - (now % interval_seconds))
+                stop_event.wait(sleep_for)
+                print(f"✅ Updated crypto at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            except Exception as e:
+                print(f"❌ Crypto updater loop error: {e}; backing off {backoff}s")
+                stop_event.wait(backoff)
+                backoff = min(backoff * 2, 60)
+
     print("🛑 Crypto updater stopped.")
 
 # ---------------------------- History Updater -----------------------------
@@ -92,16 +117,16 @@ INCREMENTS: Dict[str, int | None] = {
 
 # HARD SIZE LIMITS (trim oldest beyond these)
 HISTORY_LIMITS: Dict[str, int] = {
-    "1": 480,      # 1m:   480
-    "5": 288,      # 5m:   288
-    "15": 288,     # 15m:  288
-    "30": 336,     # 30m:  336
-    "60": 360,     # 60m:  168
-    "120": 360,    # 2h:   168
-    "240": 540,    # 4h:   168
-    "D": 366,      # 1d:   366
-    "W": 261,      # 1w:   261
-    "M": 60,       # 1M:   60
+    "1": 480,
+    "5": 288,
+    "15": 288,
+    "30": 336,
+    "60": 360,
+    "120": 360,
+    "240": 540,
+    "D": 366,
+    "W": 261,
+    "M": 60,
 }
 
 # For init via crypto_service (Binance klines)
@@ -207,91 +232,114 @@ async def ensure_crypto_histories(symbols: List[str]):
         )
         print(f"✅ Initialized crypto histories for {symbol}")
 
-async def update_crypto_histories(symbols: List[str]):
+# ---------- NEW: concurrent per-symbol update helpers ----------
+
+async def _update_one_symbol_history(symbol: str, now_ts: int):
+    """Update histories for a single symbol (called under a semaphore)."""
+    symbol = symbol.upper()
+
+    price_doc = await asyncio.to_thread(
+        crypto_prices_collection.find_one, {"symbol": symbol}
+    )
+    if not price_doc or "price" not in price_doc:
+        return
+    current_price = float(price_doc["price"])
+
+    doc = await asyncio.to_thread(
+        crypto_histories_collection.find_one, {"symbol": symbol}
+    )
+    if not doc:
+        seed = _seed(current_price, now_ts)
+        histories = {k: _cap([seed], k) for k in INCREMENTS.keys()}
+        await asyncio.to_thread(
+            crypto_histories_collection.update_one,
+            {"symbol": symbol},
+            {"$set": {"symbol": symbol, "histories": histories, "updatedAt": now_ts}},
+            upsert=True,
+        )
+        print(f"🟡 {symbol}: created fresh crypto histories with seed")
+        return
+
+    histories: Dict[str, List[Dict[str, Any]]] = doc.get("histories", {}) or {}
+    changed = False
+
+    for key, seconds_per in INCREMENTS.items():
+        candles = histories.get(key, [])
+        if not candles:
+            candles = _cap([_seed(current_price, now_ts)], key)
+            histories[key] = candles
+            changed = True
+            continue
+
+        last = candles[-1]
+        on_boundary = _is_boundary(now_ts, key, seconds_per)
+
+        if on_boundary and last["timestamp"] != now_ts:
+            last_close = last["close"]
+            candles.append({
+                "timestamp": now_ts,
+                "open": last_close,
+                "high": max(last_close, current_price),
+                "low":  min(last_close, current_price),
+                "close": current_price,
+                "volume": float(last.get("volume", 0.0)),
+            })
+            histories[key] = _cap(candles, key)
+            changed = True
+        else:
+            last["close"] = current_price
+            last["high"] = max(last["high"], current_price)
+            last["low"]  = min(last["low"],  current_price)
+            histories[key] = _cap(candles, key)
+            changed = True
+
+    if changed:
+        await asyncio.to_thread(
+            crypto_histories_collection.update_one,
+            {"symbol": symbol},
+            {"$set": {"histories": histories, "updatedAt": now_ts}},
+        )
+
+async def update_crypto_histories(symbols: List[str], max_concurrency: int = 8):
     """
-    Every minute:
-      - Read ONLY Mongo price (crypto_prices_collection)
-      - Update last candle OR append a new candle at boundary
-      - Enforce HISTORY_LIMITS on every write
+    Run one minute's worth of updates for ALL symbols with bounded concurrency.
     """
     now_ts = _start_of_minute_ts()
+    sem = asyncio.Semaphore(max_concurrency)
 
-    for sym in symbols:
-        symbol = sym.upper()
+    async def worker(sym: str):
+        async with sem:
+            try:
+                await _update_one_symbol_history(sym, now_ts)
+            except Exception as e:
+                print(f"⚠️ crypto history update failed for {sym}: {e}")
 
-        price_doc = await asyncio.to_thread(
-            crypto_prices_collection.find_one, {"symbol": symbol}
-        )
-        if not price_doc or "price" not in price_doc:
-            continue
-        current_price = float(price_doc["price"])
+    await asyncio.gather(*(worker(s) for s in symbols))
 
-        doc = await asyncio.to_thread(
-            crypto_histories_collection.find_one, {"symbol": symbol}
-        )
-        if not doc:
-            seed = _seed(current_price, now_ts)
-            histories = {k: _cap([seed], k) for k in INCREMENTS.keys()}
-            await asyncio.to_thread(
-                crypto_histories_collection.update_one,
-                {"symbol": symbol},
-                {"$set": {"symbol": symbol, "histories": histories, "updatedAt": now_ts}},
-                upsert=True,
-            )
-            print(f"🟡 {symbol}: created fresh crypto histories with seed")
-            continue
-
-        histories: Dict[str, List[Dict[str, Any]]] = doc.get("histories", {}) or {}
-        changed = False
-
-        for key, seconds_per in INCREMENTS.items():
-            candles = histories.get(key, [])
-
-            if not candles:
-                candles = _cap([_seed(current_price, now_ts)], key)
-                histories[key] = candles
-                changed = True
-                continue
-
-            last = candles[-1]
-            on_boundary = _is_boundary(now_ts, key, seconds_per)
-
-            if on_boundary and last["timestamp"] != now_ts:
-                last_close = last["close"]
-                candles.append({
-                    "timestamp": now_ts,
-                    "open": last_close,
-                    "high": max(last_close, current_price),
-                    "low":  min(last_close, current_price),
-                    "close": current_price,
-                    "volume": float(last.get("volume", 0.0)),
-                })
-                candles = _cap(candles, key)
-                histories[key] = candles
-                changed = True
-            else:
-                last["close"] = current_price
-                last["high"] = max(last["high"], current_price)
-                last["low"]  = min(last["low"],  current_price)
-                # Even on mutation, enforce cap (harmless if already within limit)
-                histories[key] = _cap(candles, key)
-                changed = True
-
-        if changed:
-            await asyncio.to_thread(
-                crypto_histories_collection.update_one,
-                {"symbol": symbol},
-                {"$set": {"histories": histories, "updatedAt": now_ts}},
-            )
-
-async def run_crypto_history_loop(symbols: List[str]):
+async def run_crypto_history_loop(symbols: List[str], max_concurrency: int = 8):
+    """
+    Drift-free scheduler:
+      - Aligns to exact minute boundaries.
+      - Uses concurrent per-symbol updates to finish within the minute.
+    """
     await asyncio.sleep(10)  # let price loop warm up
     await ensure_crypto_histories(symbols)
 
+    # align once to the next minute boundary
+    next_tick = _start_of_minute_ts() + 60
+
     while True:
         try:
-            await update_crypto_histories(symbols)
-            print(f"📈 Crypto histories updated")
+            await update_crypto_histories(symbols, max_concurrency=max_concurrency)
+            print("📈 Crypto histories updated")
         except Exception as e:
             print(f"❌ Crypto history loop error: {e}")
-        await asyncio.sleep(60 - time.time() % 60)
+
+        now = time.time()
+        if now >= next_tick:
+            # if late, jump to the next boundary (avoid cumulative drift)
+            missed = int((now - next_tick) // 60) + 1
+            next_tick += 60 * missed
+        sleep_for = max(0.0, next_tick - now)
+        await asyncio.sleep(sleep_for)
+        next_tick += 60

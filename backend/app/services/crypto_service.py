@@ -24,20 +24,56 @@ CRYPTO = Decimal("0.00000001")
 BINANCE_KLINES = "https://api.binance.us/api/v3/klines"
 
 def _hosts_for_resolution(res: str):
-    r = res.upper()
-    if r in {"D", "W", "M"}:
-        # USDT ONLY for higher timeframes
-        return [
-            ("binance.com", "USDT"),
-            ("binance.us",  "USDT"),
-        ]
-    # intraday unchanged
+    key = _normalize_crypto_res_key(res)
+    if key in {"D", "W", "M"}:
+        return [("binance.com", "USDT"), ("binance.us", "USDT")]
     return [
         ("binance.us",  "USD"),
         ("binance.us",  "USDT"),
         ("binance.com", "USDT"),
         ("binance.com", "BUSD"),
-]
+    ]
+
+def _to_seconds(ts: int | None) -> int | None:
+    """
+    Accept ms or seconds from callers and normalize to seconds.
+    """
+    if ts is None:
+        return None
+    ts = int(ts)
+    return ts // 1000 if ts >= 10**12 else ts
+
+
+def _candle_ts_s(c: dict) -> int:
+    """Robustly read a candle's timestamp as seconds (handles str/float/ms)."""
+    ts = c.get("timestamp", 0)
+    try:
+        ts = int(float(ts))
+    except Exception:
+        ts = 0
+    return ts // 1000 if ts >= 10**12 else ts
+
+def _normalize_crypto_res_key(res: str) -> str:
+    """
+    Map common aliases to internal keys:
+    {"1","5","15","30","60","120","240","D","W","M"}
+    """
+    r = (res or "").strip().lower()
+    # minutes
+    if r in {"1","1m","m1"}: return "1"
+    if r in {"5","5m","m5"}: return "5"
+    if r in {"15","15m","m15"}: return "15"
+    if r in {"30","30m","m30"}: return "30"
+    # hours
+    if r in {"60","60m","m60","1h","h1"}: return "60"
+    if r in {"120","120m","m120","2h","h2"}: return "120"
+    if r in {"240","240m","m240","4h","h4"}: return "240"
+    # higher TF
+    if r in {"d","1d","day"}: return "D"
+    if r in {"w","1w","wk","1wk","week"}: return "W"
+    if r in {"m","1mo","mo","month","1month"}: return "M"
+    return r.upper()
+
 
 async def get_user_crypto_balance(uid: str) -> dict:
     user = await asyncio.to_thread(users_collection.find_one, {"uid": uid})
@@ -61,53 +97,67 @@ async def get_crypto_history(
     end_ts: int | None = None,
     limit: int = 1000,
 ) -> dict:
-    interval = CRYPTO_RES_MAP.get(resolution.upper())
+    key = _normalize_crypto_res_key(resolution)
+    interval = CRYPTO_RES_MAP.get(key)
     if not interval:
-        return {"error": f"Unsupported resolution: {resolution}"}
+        return {"error": f"Unsupported resolution: {resolution} (normalized='{key}')"}
 
-    sym = symbol.upper()
+    sym = (symbol or "").strip().upper()
     params_base = {
         "interval": interval,
-        "limit": min(max(limit, 1), 1000),
+        "limit": min(max(int(limit), 1), 1000),
     }
-    if start_ts is not None:
-        params_base["startTime"] = int(start_ts) * 1000
-    if end_ts is not None:
-        params_base["endTime"] = int(end_ts) * 1000
+
+    # accept ms or s; Binance expects ms
+    s = _to_seconds(start_ts) if start_ts is not None else None
+    e = _to_seconds(end_ts)   if end_ts   is not None else None
+    if s is not None:
+        params_base["startTime"] = int(s) * 1000
+    if e is not None:
+        params_base["endTime"] = int(e) * 1000  # we'll still enforce exclusive end locally if needed
 
     timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
-        # D/W/M use USDT only (global first), intraday keeps your broader order
-        for host, quote in _hosts_for_resolution(resolution):
+        for host, quote in _hosts_for_resolution(key):
             pair = f"{sym}{quote}"
             url = f"https://api.{host}/api/v3/klines"
             try:
                 r = await client.get(url, params={"symbol": pair, **params_base})
                 r.raise_for_status()
                 klines = r.json()
-
-                history = [{
-                    "timestamp": k[0] // 1000,
-                    "open": float(k[1]),
-                    "high": float(k[2]),
-                    "low":  float(k[3]),
-                    "close": float(k[4]),
-                    "volume": float(k[5]),
-                } for k in klines]
+                # Binance returns [ openTime, open, high, low, close, volume, ... ]
+                history = []
+                for k in klines:
+                    ts_s = k[0] // 1000
+                    # enforce inclusive start / EXCLUSIVE end if provided
+                    if s is not None and ts_s < s:
+                        continue
+                    if e is not None and not (ts_s < e):
+                        continue
+                    history.append({
+                        "timestamp": ts_s,
+                        "open":   float(k[1]),
+                        "high":   float(k[2]),
+                        "low":    float(k[3]),
+                        "close":  float(k[4]),
+                        "volume": float(k[5]),
+                    })
 
                 if history:
+                    # keep only the most recent N, preserve ASC
+                    if limit and len(history) > limit:
+                        history = history[-limit:]
+
                     return {
                         "symbol": sym,
-                        "resolution": resolution,
+                        "resolution": key,       # normalized key
                         "history": history,
                         "source": f"{host}:{pair}",
                     }
             except Exception:
-                # try next host/quote
                 continue
 
-    # nothing worked
-    return {"symbol": sym, "resolution": resolution, "history": []}
+    return {"symbol": sym, "resolution": key, "history": []}
 
 async def crypto_trade(symbol: str, action: str, quantity: float, price: float, user_id: str) -> dict:
     try:
@@ -175,13 +225,6 @@ async def crypto_trade(symbol: str, action: str, quantity: float, price: float, 
         print("❌ Backend crypto trade error:", e)
         traceback.print_exc()
         return {"error": str(e), "trace": traceback.format_exc()}
-    
-def _normalize_crypto_res_key(res: str) -> str:
-    r = res.upper()
-    # allow "1m","5m","15m","30m","60m","120","240","1h","2h","4h","D","W","M"
-    m = {"1M":"M", "1W":"W", "1D":"D", "1H":"60", "2H":"120", "4H":"240",
-         "1m":"1","5m":"5","15m":"15","30m":"30"}
-    return m.get(r, r)
 
 async def get_crypto_history_db(
     symbol: str,
@@ -190,25 +233,29 @@ async def get_crypto_history_db(
     end_ts: int | None = None,
     limit: int = 500,
 ) -> dict:
-    sym = symbol.upper()
+    sym = (symbol or "").strip().upper()
     key = _normalize_crypto_res_key(resolution)
 
-    # 1) fetch the doc from Mongo
     doc = await asyncio.to_thread(crypto_histories_collection.find_one, {"symbol": sym})
     if not doc or "histories" not in doc:
         return {"error": f"No stored histories for {sym}."}
 
-    candles = (doc["histories"] or {}).get(key, [])
+    candles = (doc["histories"] or {}).get(key, []) or []
     if not candles:
         return {"symbol": sym, "resolution": key, "history": []}
 
-    # 2) filter by time window if provided
-    if start_ts is not None or end_ts is not None:
-        s = start_ts if start_ts is not None else -10**18
-        e = end_ts   if end_ts   is not None else  10**18
-        candles = [c for c in candles if s <= int(c.get("timestamp", 0)) <= e]
+    # Ensure ASC
+    candles = sorted(candles, key=_candle_ts_s)
 
-    # 3) enforce limit (most recent first by default)
+    # Inclusive start / EXCLUSIVE end, accept ms or s
+    if start_ts is not None or end_ts is not None:
+        s = _to_seconds(start_ts) if start_ts is not None else -10**18
+        e = _to_seconds(end_ts)   if end_ts   is not None else  10**18
+        if e <= s:
+            e = s + 1
+        candles = [c for c in candles if s <= _candle_ts_s(c) < e]
+
+    # Limit most recent N, keep ASC
     if limit and len(candles) > limit:
         candles = candles[-limit:]
 
