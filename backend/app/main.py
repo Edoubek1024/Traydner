@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-import contextlib
 import threading
 import asyncio
 
@@ -12,15 +11,40 @@ from app.firebase.firebase_setup import init_firebase
 
 from app.core.symbols import CRYPTO_SYMBOLS, STOCK_SYMBOLS, FOREX_SYMBOLS
 
-# Price loops (all thread-based)
+# Price loops (thread-based, sync I/O inside)
 from app.services.stock_updater import run_stock_price_loop
 from app.services.forex_updater import run_forex_price_loop
-from app.services.crypto_updater import run_crypto_price_loop  # <-- use sync/threaded version
+from app.services.crypto_updater import run_crypto_price_loop
 
-# History loops (async tasks)
+# History loops (async, infinite loops) — we'll run each in its own thread+event loop
 from app.services.stock_updater import run_stock_history_loop
 from app.services.crypto_updater import run_crypto_history_loop
 from app.services.forex_updater import run_forex_history_loop
+
+
+# --------------------------
+# Helpers
+# --------------------------
+def _start_thread(name: str, target, *args, daemon: bool = True) -> threading.Thread:
+    th = threading.Thread(target=target, args=args, name=name, daemon=daemon)
+    th.start()
+    return th
+
+def _start_async_worker_thread(name: str, coro_fn, *args) -> threading.Thread:
+    """
+    Runs an async infinite-loop worker (coro_fn) on its own event loop in a dedicated thread.
+    This isolates it from FastAPI's main event loop so incoming requests can't delay ticks.
+    """
+    def _runner():
+        try:
+            asyncio.run(coro_fn(*args))
+        except asyncio.CancelledError:
+            # Normal shutdown path
+            pass
+        except Exception as e:
+            print(f"❌ {name} crashed: {e}")
+
+    return _start_thread(name, _runner)
 
 
 @asynccontextmanager
@@ -28,57 +52,71 @@ async def lifespan(app: FastAPI):
     # ----- one-time init -----
     init_firebase()
 
+    # --------------------------
+    # Price updater threads
+    # --------------------------
     stock_stop = threading.Event()
-    stock_thread = threading.Thread(
-        target=run_stock_price_loop,
-        args=(stock_stop, STOCK_SYMBOLS, 20),   # <-- 5 sec interval = several times/min
+    stock_thread = _start_thread(
+        "stock-price-loop",
+        run_stock_price_loop,
+        stock_stop,
+        STOCK_SYMBOLS,
+        20,  # seconds; keep under a minute so we get multiple passes/min
         daemon=True,
     )
-    stock_thread.start()
     print("✅ Background stock price updater (threaded) started.")
 
     crypto_stop = threading.Event()
-    crypto_thread = threading.Thread(
-        target=run_crypto_price_loop, args=(crypto_stop, CRYPTO_SYMBOLS, 20), daemon=True
+    crypto_thread = _start_thread(
+        "crypto-price-loop",
+        run_crypto_price_loop,
+        crypto_stop,
+        CRYPTO_SYMBOLS,
+        20,
+        True,
     )
-    crypto_thread.start()
     print("✅ Background crypto price updater started (thread).")
 
     forex_stop = threading.Event()
-    forex_thread = threading.Thread(
-        target=run_forex_price_loop, args=(forex_stop, 30), daemon=True
+    forex_thread = _start_thread(
+        "forex-price-loop",
+        run_forex_price_loop,
+        forex_stop,
+        30,
+        True,
     )
-    forex_thread.start()
-    print("✅ Background forex price updater started.")
+    print("✅ Background forex price updater started (thread).")
 
-    # ----- start async history tasks (same event loop) -----
-    loop = asyncio.get_running_loop()
-    stock_hist_task = loop.create_task(run_stock_history_loop(STOCK_SYMBOLS))
-    crypto_hist_task = loop.create_task(run_crypto_history_loop(CRYPTO_SYMBOLS, max_concurrency=8))
-    forex_hist_task = loop.create_task(run_forex_history_loop(FOREX_SYMBOLS))
-    print("✅ Background history updaters started.")
+    # --------------------------
+    # History updater async workers (each on its own loop/thread)
+    # --------------------------
+    stock_hist_thread  = _start_async_worker_thread("stock-history-loop",  run_stock_history_loop,  STOCK_SYMBOLS)
+    crypto_hist_thread = _start_async_worker_thread("crypto-history-loop", run_crypto_history_loop, CRYPTO_SYMBOLS, )
+    # keep your chosen max_concurrency inside the service function if needed
+    forex_hist_thread  = _start_async_worker_thread("forex-history-loop",  run_forex_history_loop,  FOREX_SYMBOLS)
+
+    print("✅ Background history updaters started (each on its own event loop).")
 
     try:
         yield
     finally:
         print("🛑 Shutting down background updaters...")
 
-        # Stop thread-based price loops
+        # Request stop for thread-based price loops
         stock_stop.set()
         crypto_stop.set()
         forex_stop.set()
-        stock_thread.join(timeout=5)
-        crypto_thread.join(timeout=5)
-        forex_thread.join(timeout=5)
 
-        # Stop history tasks
-        for t in (stock_hist_task, crypto_hist_task, forex_hist_task):
-            t.cancel()
-        for t in (stock_hist_task, crypto_hist_task, forex_hist_task):
-            with contextlib.suppress(asyncio.CancelledError):
-                await t
+        # Join price threads (don’t block shutdown forever)
+        for th in (stock_thread, crypto_thread, forex_thread):
+            th.join(timeout=5)
 
-        print("✅ All background updaters stopped.")
+        # We can't cancel threads directly; the async workers run until process exits.
+        # Join briefly so logs show orderly shutdown.
+        for th in (stock_hist_thread, crypto_hist_thread, forex_hist_thread):
+            th.join(timeout=2)
+
+        print("✅ All background updaters signaled to stop.")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -103,7 +141,11 @@ app.include_router(forex_routes.router)
 app.include_router(api_key_routes.router)
 app.include_router(remote_routes.router)
 
-
 @app.get("/api/ping")
 def ping():
     return {"message": "pong"}
+
+# Simple health endpoint for Cloud Run HTTP probes
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
