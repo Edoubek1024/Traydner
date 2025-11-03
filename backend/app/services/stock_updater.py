@@ -12,19 +12,29 @@ from app.core.symbols import STOCK_SYMBOLS
 from app.core.config import FINNHUB_API_KEYS
 from app.services.stock_service import get_stock_history, is_market_open
 
+from concurrent.futures import ThreadPoolExecutor, wait
+
+
 def get_api_key(i):
   return FINNHUB_API_KEYS[i % len(FINNHUB_API_KEYS)]
 
-async def fetch_prices():
-  async with httpx.AsyncClient() as client:
-    results = []
-    for i, symbol in enumerate(STOCK_SYMBOLS):
-      api_key = get_api_key(i)
-      url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={api_key}"
-      result = await fetch_finnhub_price(symbol, client, url)
-      results.append(result)
-      await asyncio.sleep(0.35)
-    return results
+async def fetch_prices(max_concurrency: int = 3) -> list[dict]:
+    """
+    Fetch quotes with up to `max_concurrency` in-flight requests.
+    """
+    sem = asyncio.Semaphore(max_concurrency)
+    timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+    limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
+
+    async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+        async def one(i: int, symbol: str):
+            api_key = get_api_key(i)
+            url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={api_key}"
+            async with sem:                       # <= cap concurrency at 3
+                return await fetch_finnhub_price(symbol, client, url)
+
+        tasks = [one(i, s) for i, s in enumerate(STOCK_SYMBOLS)]
+        return await asyncio.gather(*tasks)
 
 async def fetch_finnhub_price(symbol: str, client: httpx.AsyncClient, url: str) -> dict:
   res = None
@@ -112,33 +122,43 @@ def _update_one_symbol_price_sync(client: httpx.Client, symbol: str, api_key: st
         print(f"⚠️  Stock price update failed for {sym}: {e}")
 
 
+def _batched(seq, n):
+    for i in range(0, len(seq), n):
+        yield i, seq[i:i+n]
+
 def run_stock_price_loop(
     stop_event: threading.Event,
     symbols: Iterable[str],
     interval_seconds: int = 5,
 ) -> None:
-    """
-    Sync/threaded price loop (like crypto):
-      - reuses one httpx.Client (keep-alive)
-      - round-robins API keys
-      - aligns sleep to the next interval boundary (low drift)
-    """
     syms: List[str] = [s.upper() for s in symbols]
 
     timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
     transport = httpx.HTTPTransport(retries=2)
 
-    with httpx.Client(timeout=timeout, transport=transport) as client:
+    with httpx.Client(timeout=timeout, transport=transport) as client, \
+         ThreadPoolExecutor(max_workers=3) as pool:  # <= cap at 3 workers
+
         # initial alignment to boundary
         sleep_for = max(0.0, interval_seconds - (time.time() % interval_seconds))
         stop_event.wait(sleep_for)
 
         while not stop_event.is_set():
             try:
-                for i, sym in enumerate(syms):
+                # submit work in chunks of 3; wait between chunks
+                for start_idx, batch in _batched(syms, 3):
                     if stop_event.is_set():
                         break
-                    _update_one_symbol_price_sync(client, sym, _api_key_for_index(i))
+                    futs = [
+                        pool.submit(
+                            _update_one_symbol_price_sync,
+                            client,
+                            sym,
+                            _api_key_for_index(start_idx + j),  # keep per-index key RR
+                        )
+                        for j, sym in enumerate(batch)
+                    ]
+                    wait(futs)  # <= ensure "at most 3 at a time"
 
                 # align to next boundary
                 now = time.time()
@@ -147,7 +167,6 @@ def run_stock_price_loop(
                 print(f"✅ Updated stock prices at {time.strftime('%Y-%m-%d %H:%M:%S')}")
             except Exception as e:
                 print(f"❌ Stock updater loop error: {e}")
-                # short backoff without losing alignment too much
                 stop_event.wait(2.0)
 
 INCREMENTS = {
