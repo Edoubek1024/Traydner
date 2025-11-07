@@ -31,6 +31,8 @@ def update_forex_prices_once(
         if get_usd_based_forex is None:
             raise ImportError(f"Could not import get_usd_based_forex: {_import_error}")
         fetcher = get_usd_based_forex
+    if not callable(fetcher):
+        raise TypeError(f"'fetcher' must be callable, got {type(fetcher).__name__}")
 
     try:
         prices = fetcher()  # {"EUR/USD": 1.09, "JPY/USD": 0.0063, ...}
@@ -43,16 +45,15 @@ def update_forex_prices_once(
     count = 0
     for symbol, price in prices.items():
         try:
+            base = symbol.split("/")[0] if "/" in symbol else symbol
             forex_prices_collection.update_one(
-                {"symbol": symbol},
-                {
-                    "$set": {
-                        "symbol": symbol,
-                        "price": float(price),
-                        "source": source,
-                        "updatedAt": now,
-                    }
-                },
+                {"symbol": base},
+                {"$set": {
+                    "symbol": base,
+                    "price": float(price),
+                    "source": source,
+                    "updatedAt": now,
+                }},
                 upsert=True,
             )
             count += 1

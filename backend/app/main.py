@@ -73,7 +73,6 @@ async def lifespan(app: FastAPI):
         crypto_stop,
         CRYPTO_SYMBOLS,
         20,
-        True,
     )
     print("✅ Background crypto price updater started (thread).")
 
@@ -83,7 +82,6 @@ async def lifespan(app: FastAPI):
         run_forex_price_loop,
         forex_stop,
         30,
-        True,
     )
     print("✅ Background forex price updater started (thread).")
 
