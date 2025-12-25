@@ -6,9 +6,38 @@ Traydner is a full-stack trading practice platform that helps users learn and te
 
 Users begin with $100,000 in simulated cash and can trade across stocks, cryptocurrencies, and forex markets using real-time pricing data. Through the Traydner web interface, users place paper trades, track portfolio performance, and refine strategies over time. For advanced workflows, Traydner also provides a personal API key, allowing users to programmatically execute simulated trades directly against their own paper wallet making it easy to test automated strategies and algorithmic trading systems in a safe, controlled environment.
 
-- [Preview](https://www.traydner.com/)
+- <a href="https://www.traydner.com/" target="_blank" rel="noopener noreferrer">Preview</a>
+- [Backend](https://github.com/Edoubek1024/Traydner?tab=readme-ov-file#complete-backend-overview)
+- [Frontend](https://github.com/Edoubek1024/Traydner?tab=readme-ov-file#complete-frontend-overview)
+
+# Complete Backend Overview
+
+The backend is primarily built with FastAPI and Python, leveraging async endpoints for high-performance API requests.
+
+## Firebase
+Firebase is used on the backend for user recognition and request verification. All authenticated actions require a valid Firebase user session established on the frontend. Once logged in, Firebase provides a trusted UID, which is passed to the backend and used as the authoritative identifier for accessing and mutating user data. Backend routes only interact with user data when a valid UID is present, ensuring requests are tied to an authenticated user. User records are created or updated using this UID and synchronized across MongoDB and Firestore for reliability and fallback access.
+
+## MongoDB
+MongoDB serves as the primary data store for the entire platform, including users, account balances, trades, symbol prices, historical market data, and user API keys. Market price histories are stored in candlestick format and vary in granularity, with intervals ranging from 1 minute up to 1 week, allowing both short-term analysis and long-term trend evaluation. Centralizing all data in MongoDB enables consistent data models, fast access, and flexible, effectively unbounded data collection without outsourcing storage to third-party services.
+
+## Price/History Updates
+The backend continuously retrieves real-time price data several times per minute for dozens of stock symbols directly from Finnhub, along with live pricing for a wide range of cryptocurrencies and additional market data sourced from Yahoo Finance. These prices are immediately written to MongoDB to keep current symbol data accurate and up to date.
+
+At the top of every minute, the backend synchronizes stored price histories in MongoDB to reflect the latest real-time prices. Historical data is stored in candlestick format and maintained at multiple time resolutions. Initial historical datasets are collected from yfinance for stocks and forex and from Binance for crypto, after which all histories are manually updated and extended by the backend to ensure consistency with live market data.
+
+Detailed definitions and implementation of all remote routes can be found in the backend `services` directory.
+
+## Frontend/API Communication
+
+Traydner uses FastAPI to expose a RESTful JSON API that serves as the primary communication layer between the frontend and backend. The React frontend interacts with these endpoints to retrieve prices, histories, balances, and execute trades, while external users can interact with the same backend through the public API.
+
+All remote requests are authenticated using either Firebase-backed user sessions or personal API keys, ensuring that every request is securely tied to a specific user. The API supports real-time price retrieval, historical candlestick data queries across multiple resolutions, balance lookups, trade execution, and market status checks for stocks, crypto, and forex. Administrative endpoints are also available for controlled maintenance tasks such as history reinitialization.
+
+Detailed definitions and implementation of all remote routes can be found in the backend `routes` directory.
 
 # Complete Frontend Overview
+
+The frontend is primarily written in Typescript with Tailwind and is entirely React-based. Detailed backgrounds used can also be found on [React Bits](https://reactbits.dev/).
 
 ## Pre-login
 Before logging in, these are the pages available to the user.
