@@ -22,7 +22,6 @@ async def price(symbol: str = Query(..., min_length=1)):
 async def market_status():
     return await get_forex_market_status()
 
-# add params similar to crypto
 @router.get("/history")
 async def get_history(
     symbol: str = Query(..., description="Forex symbol, e.g. EUR, JPY"),
@@ -31,7 +30,6 @@ async def get_history(
     end:   Optional[int] = Query(None, description="Unix seconds"),
     limit: int = Query(500, ge=1, le=2000),
 ):
-    # Map to yfinance intervals we support
     resolution_map = {
         "1": "1m",
         "5": "5m",
@@ -40,7 +38,7 @@ async def get_history(
         "60": "60m",
         "240": "4h",
         "D": "1d",
-        "DY": "1d_ytd",   # daily since Jan 1
+        "DY": "1d_ytd",
         "W": "1wk",
         "M": "1mo",
     }

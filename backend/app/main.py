@@ -31,10 +31,6 @@ def _start_thread(name: str, target, *args, daemon: bool = True) -> threading.Th
     return th
 
 def _start_async_worker_thread(name: str, coro_fn, *args) -> threading.Thread:
-    """
-    Runs an async infinite-loop worker (coro_fn) on its own event loop in a dedicated thread.
-    This isolates it from FastAPI's main event loop so incoming requests can't delay ticks.
-    """
     def _runner():
         try:
             asyncio.run(coro_fn(*args))
@@ -143,7 +139,6 @@ app.include_router(remote_routes.router)
 def ping():
     return {"message": "pong"}
 
-# Simple health endpoint for Cloud Run HTTP probes
 @app.get("/healthz")
 def healthz():
     return {"ok": True}

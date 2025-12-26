@@ -1,4 +1,3 @@
-# app/core/auth_dependencies.py
 from fastapi import Header, HTTPException, status
 from datetime import datetime
 import bcrypt
@@ -27,7 +26,7 @@ async def get_current_user_from_api_key(authorization: str = Header(None)):
     api_keys_collection.update_one({"_id": key_doc["_id"]},
                                    {"$set": {"last_used_at": datetime.utcnow()}})
 
-    uid = key_doc.get("uid")  # you store 'uid' in the api_keys doc
+    uid = key_doc.get("uid")
     if not uid:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail="API key missing associated uid")

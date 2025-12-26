@@ -10,18 +10,14 @@ import holidays
 from app.db.mongo import stock_prices_collection, users_collection, trades_collection, stock_histories_collection
 
 def _to_seconds(ts: int | None) -> int | None:
-    """
-    Accept ms or seconds from callers and normalize to seconds.
-    """
+
     if ts is None:
         return None
     ts = int(ts)
     return ts // 1000 if ts >= 10**12 else ts
 
 def _candle_ts_s(c: dict) -> int:
-    """
-    Robustly read a candle's timestamp as seconds (handles str/float/ms).
-    """
+
     ts = c.get("timestamp", 0)
     try:
         ts = int(float(ts))
@@ -30,9 +26,7 @@ def _candle_ts_s(c: dict) -> int:
     return ts // 1000 if ts >= 10**12 else ts
 
 def _normalize_window(start_ts: int | None, end_ts: int | None) -> tuple[int, int]:
-    """
-    Build an inclusive start / exclusive end window in seconds.
-    """
+
     s = _to_seconds(start_ts) if start_ts is not None else -10**18
     e = _to_seconds(end_ts)   if end_ts   is not None else  10**18
     if e <= s:
@@ -81,9 +75,7 @@ async def get_current_price(symbol: str) -> dict:
         }
 
 def _yf_params_from_db_key(db_key: str) -> tuple[str, str]:
-    """
-    Map our normalized DB key to Yahoo (period, interval).
-    """
+
     if db_key == "1":   return ("1d",  "1m")
     if db_key == "5":   return ("60d", "5m")
     if db_key == "15":  return ("60d", "15m")

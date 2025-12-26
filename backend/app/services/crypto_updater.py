@@ -1,4 +1,3 @@
-# app/services/crypto_updater.py
 import asyncio
 import time
 from datetime import datetime, timezone
@@ -10,7 +9,6 @@ import httpx
 from app.db.mongo import crypto_prices_collection, crypto_histories_collection
 from app.services.crypto_service import get_crypto_history
 
-# ----------------------------- Price Updater ------------------------------
 
 BINANCE_HOSTS: List[Tuple[str, str]] = [
     ("binance.us", "USD"),
@@ -38,8 +36,6 @@ def _update_one_symbol_price(symbol: str, client: httpx.Client) -> None:
     price, source = _fetch_binance_price_sync(symbol, client)
     now = time.time()
 
-    # Optional: skip price write if unchanged (reduces noisy writes),
-    # still bump updatedAt so readers know the loop is alive.
     existing = crypto_prices_collection.find_one({"symbol": symbol.upper()}, {"price": 1})
     if existing and "price" in existing and float(existing["price"]) == price:
         crypto_prices_collection.update_one(
@@ -65,12 +61,6 @@ def run_crypto_price_loop(
     symbols: Iterable[str],
     interval_seconds: int = 15,
 ) -> None:
-    """
-    Consistent tick loop:
-      - reuse a single HTTP client (low latency, stable DNS/TLS)
-      - align to interval boundary (low drift)
-      - isolate per-symbol errors
-    """
     symbols_up: List[str] = [s.upper() for s in symbols]
     transport = httpx.HTTPTransport(retries=2)
     backoff = 1
@@ -88,7 +78,6 @@ def run_crypto_price_loop(
                         print(f"⚠️  Failed to update {sym}: {e}")
 
                 backoff = 1
-                # Align to the next interval boundary to avoid drift
                 now = time.time()
                 sleep_for = max(0.2, interval_seconds - (now % interval_seconds))
                 stop_event.wait(sleep_for)
@@ -100,22 +89,20 @@ def run_crypto_price_loop(
 
     print("🛑 Crypto updater stopped.")
 
-# ---------------------------- History Updater -----------------------------
 
 INCREMENTS: Dict[str, int | None] = {
-    "1": 60,        # 1m
-    "5": 300,       # 5m
-    "15": 900,      # 15m
-    "30": 1800,     # 30m
-    "60": 3600,     # 1h
-    "120": 7200,    # 2h
-    "240": 14400,   # 4h
-    "D": 86400,     # 1d  (UTC midnight)
-    "W": 604800,    # 1w  (UTC Monday 00:00)
-    "M": None,      # 1M  (month boundary; handled separately)
+    "1": 60,
+    "5": 300,
+    "15": 900,
+    "30": 1800,
+    "60": 3600,
+    "120": 7200,
+    "240": 14400,
+    "D": 86400,
+    "W": 604800,
+    "M": None,
 }
 
-# HARD SIZE LIMITS (trim oldest beyond these)
 HISTORY_LIMITS: Dict[str, int] = {
     "1": 480,
     "5": 288,
@@ -129,7 +116,6 @@ HISTORY_LIMITS: Dict[str, int] = {
     "M": 60,
 }
 
-# For init via crypto_service (Binance klines)
 RESOLUTION_MAP: Dict[str, str] = {
     "1": "1", "5": "5", "15": "15", "30": "30",
     "60": "60", "120": "120", "240": "240",
@@ -149,7 +135,7 @@ def _is_day_boundary_utc(ts: int) -> bool:
 
 def _is_week_boundary_utc(ts: int) -> bool:
     dt = datetime.fromtimestamp(ts, UTC)
-    return dt.weekday() == 0 and dt.hour == 0 and dt.minute == 0  # Monday 00:00 UTC
+    return dt.weekday() == 0 and dt.hour == 0 and dt.minute == 0
 
 def _is_month_boundary_utc(ts: int) -> bool:
     dt = datetime.fromtimestamp(ts, UTC)
@@ -177,19 +163,12 @@ def _seed(price: float, ts: int) -> Dict[str, Any]:
     }
 
 def _cap(candles: List[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
-    """Keep only the most-recent N candles for this key."""
     limit = HISTORY_LIMITS.get(key)
     if not limit or len(candles) <= limit:
         return candles
     return candles[-limit:]
 
 async def ensure_crypto_histories(symbols: List[str]):
-    """
-    Initialize histories if missing:
-      - Try Binance klines via get_crypto_history() per bucket
-      - If everything empty, seed all buckets from current Mongo price
-      - Always cap to HISTORY_LIMITS
-    """
     for sym in symbols:
         symbol = sym.upper()
         existing = await asyncio.to_thread(
@@ -200,7 +179,6 @@ async def ensure_crypto_histories(symbols: List[str]):
 
         histories: Dict[str, List[Dict[str, Any]]] = {k: [] for k in INCREMENTS.keys()}
 
-        # Best-effort backfill per bucket
         for key, res in RESOLUTION_MAP.items():
             try:
                 h = await get_crypto_history(symbol, res, limit=max(HISTORY_LIMITS.get(key, 500), 500))
@@ -210,7 +188,6 @@ async def ensure_crypto_histories(symbols: List[str]):
             except Exception as e:
                 print(f"⚠️ {symbol}: init error {key}: {e}")
 
-        # If totally empty, seed from current Mongo price
         if all(len(v) == 0 for v in histories.values()):
             price_doc = await asyncio.to_thread(
                 crypto_prices_collection.find_one, {"symbol": symbol}
@@ -232,10 +209,8 @@ async def ensure_crypto_histories(symbols: List[str]):
         )
         print(f"✅ Initialized crypto histories for {symbol}")
 
-# ---------- NEW: concurrent per-symbol update helpers ----------
 
 async def _update_one_symbol_history(symbol: str, now_ts: int):
-    """Update histories for a single symbol (called under a semaphore)."""
     symbol = symbol.upper()
 
     price_doc = await asyncio.to_thread(
@@ -301,9 +276,6 @@ async def _update_one_symbol_history(symbol: str, now_ts: int):
         )
 
 async def update_crypto_histories(symbols: List[str], max_concurrency: int = 8):
-    """
-    Run one minute's worth of updates for ALL symbols with bounded concurrency.
-    """
     now_ts = _start_of_minute_ts()
     sem = asyncio.Semaphore(max_concurrency)
 
@@ -317,15 +289,9 @@ async def update_crypto_histories(symbols: List[str], max_concurrency: int = 8):
     await asyncio.gather(*(worker(s) for s in symbols))
 
 async def run_crypto_history_loop(symbols: List[str], max_concurrency: int = 8):
-    """
-    Drift-free scheduler:
-      - Aligns to exact minute boundaries.
-      - Uses concurrent per-symbol updates to finish within the minute.
-    """
-    await asyncio.sleep(10)  # let price loop warm up
+    await asyncio.sleep(10)
     await ensure_crypto_histories(symbols)
 
-    # align once to the next minute boundary
     next_tick = _start_of_minute_ts() + 60
 
     while True:
@@ -337,7 +303,6 @@ async def run_crypto_history_loop(symbols: List[str], max_concurrency: int = 8):
 
         now = time.time()
         if now >= next_tick:
-            # if late, jump to the next boundary (avoid cumulative drift)
             missed = int((now - next_tick) // 60) + 1
             next_tick += 60 * missed
         sleep_for = max(0.0, next_tick - now)

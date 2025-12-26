@@ -21,18 +21,14 @@ HEADERS = {
 }
 
 def _to_seconds(ts: int | None) -> int | None:
-    """
-    Accept ms or seconds from callers and normalize to seconds.
-    """
+
     if ts is None:
         return None
     ts = int(ts)
     return ts // 1000 if ts >= 10**12 else ts
 
 def _candle_ts_s(c: dict) -> int:
-    """
-    Robustly read a candle's timestamp as seconds (handles str/float/ms).
-    """
+
     ts = c.get("timestamp", 0)
     try:
         ts = int(float(ts))
@@ -138,7 +134,6 @@ def scrape_yahoo_currencies_html(url: str = URL) -> dict[str, float]:
                             usd_map[core] = inv
                     except Exception:
                         continue
-            # ignore non-USD crosses/others
     except Exception as e:
         print(f"⚠️ conversion failed: {e}")
         return {}
@@ -149,7 +144,7 @@ async def get_forex_market_status() -> dict:
     eastern = timezone("US/Eastern")
     now = datetime.now(eastern)
 
-    weekday = now.weekday()  # Monday=0, Sunday=6
+    weekday = now.weekday()
     current_time = now.time()
 
     if weekday == 6:
@@ -197,12 +192,7 @@ async def get_forex_history(
     end_ts: int | None = None,
     limit: int = 500,
 ) -> dict:
-    """
-    Fetch FX candles from Yahoo via yfinance.
 
-    Intraday:  1m,5m,15m,30m,60m,120m(=2h),240m(=4h)
-    Higher TF: 1d, 1wk   (monthly if you want: 1mo)
-    """
     try:
         import yfinance as yf
         import math

@@ -151,8 +151,6 @@ const HoldingsTable = ({ title, holdings, showHeaders = true }: HoldingsTablePro
 const asPrice = (x: any): number =>
   typeof x === "number" ? x : (x?.price ?? x?.c ?? 0);
 
-// value vs USD for forex (EUR -> EURUSD)
-const toUsdPair = (ccy: string) => `${ccy}USD`;
 
 const Holdings = () => {
   const [cashHoldings, setCashHoldings] = useState<Holding[]>([]);
@@ -277,8 +275,7 @@ const Holdings = () => {
         const fxPrices = await Promise.all(
           fxSymbols.map(async (ccy) => {
             try {
-              const pair = toUsdPair(ccy);
-              const p = await fetchForexPrice(pair);
+              const p = await fetchForexPrice(ccy);
               return [ccy, asPrice(p)] as const;
             } catch {
               return [ccy, 0] as const;

@@ -23,10 +23,7 @@ def update_forex_prices_once(
     fetcher: Optional[Callable[[], Dict[str, float]]] = None,
     source: str = "yahoo_html",
 ) -> Dict[str, int]:
-    """
-    Calls `get_usd_based_forex()` (or a provided fetcher), then upserts into Mongo.
-    Returns {"count": N} for visibility.
-    """
+
     if fetcher is None:
         if get_usd_based_forex is None:
             raise ImportError(f"Could not import get_usd_based_forex: {_import_error}")
@@ -73,10 +70,7 @@ def run_forex_price_loop(
     fetcher: Optional[Callable[[], Dict[str, float]]] = None,
     source: str = "yahoo_html",
 ) -> None:
-    """
-    Background loop that refreshes forex prices periodically using `get_usd_based_forex()`.
-    Does exponential backoff on errors.
-    """
+
     backoff = 1
     while not stop_event.is_set():
         try:
@@ -198,9 +192,7 @@ def _cap(lst: List[dict], key: str) -> List[dict]:
 
 
 def _aggregate_rows_to_buckets(rows: List[dict], key: str) -> List[dict]:
-    """Aggregate provided candle rows into the target bucket alignment.
-    Assumes `rows` are ASC by timestamp and represent a finer or equal granularity.
-    """
+
     if not rows:
         return []
 
@@ -230,7 +222,6 @@ def _aggregate_rows_to_buckets(rows: List[dict], key: str) -> List[dict]:
 
 
 async def ensure_forex_histories(bases: List[str]):
-    """Initialize histories for each 3-letter base (e.g., EUR, JPY)."""
     if get_forex_history is None:
         raise ImportError("get_forex_history unavailable")
 

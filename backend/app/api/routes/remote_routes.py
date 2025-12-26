@@ -20,17 +20,10 @@ from app.core.symbols import STOCK_SYMBOLS, CRYPTO_SYMBOLS, FOREX_SYMBOLS
 
 router = APIRouter(prefix="/api/remote", tags=["Remote"])
 
-# ---- NEW: robust price coercion (route-level only) --------------------------
 def _coerce_price_payload(raw: Any, market: str, symbol: str) -> Tuple[float, Dict[str, Any]]:
-    """
-    Accept common shapes (float/dict/tuple/list) from service functions and
-    return (price: float, meta: {source, updatedAt}). Raise 502 on unusable data.
-    """
-    # float/int -> good
     if isinstance(raw, (int, float)):
         return float(raw), {"source": f"{market}_svc", "updatedAt": int(time.time())}
 
-    # dict with common keys
     if isinstance(raw, dict):
         for key in ("price", "last", "value", "close"):
             if key in raw and raw[key] is not None:
@@ -42,23 +35,19 @@ def _coerce_price_payload(raw: Any, market: str, symbol: str) -> Tuple[float, Di
                     "source": raw.get("source", f"{market}_svc"),
                     "updatedAt": raw.get("updatedAt", int(time.time())),
                 }
-        # Couldn't find a usable key
         raise HTTPException(
             status_code=502,
             detail=f"{market} price payload for {symbol} missing usable price key (got keys: {list(raw.keys())})",
         )
 
-    # tuple/list like (price, ts) or [price, ...]
     if isinstance(raw, (tuple, list)) and raw:
         if isinstance(raw[0], (int, float)):
             return float(raw[0]), {"source": f"{market}_svc", "updatedAt": int(time.time())}
 
-    # Anything else -> 502 with type info
     raise HTTPException(
         status_code=502,
         detail=f"{market} price payload for {symbol} not supported (type={type(raw).__name__}, value={raw!r})",
     )
-# -----------------------------------------------------------------------------
 
 @router.post("/trade")
 async def execute_trade(
@@ -161,10 +150,7 @@ async def get_history(
     limit: int = Query(500, ge=1, le=5000, description="Maximum number of candles to return"),
     _user = Depends(get_current_user_from_api_key),
 ):
-    """
-    Fetch recent historical candles for a given symbol and resolution.
-    Works for stocks, crypto, and forex.
-    """
+
     sym = symbol.upper()
 
     if sym in STOCK_SYMBOLS:
@@ -202,7 +188,6 @@ async def _get_email_by_uid(uid: str) -> Optional[str]:
     doc = await asyncio.to_thread(users_collection.find_one, {"uid": uid})
     if not doc:
         return None
-    # normalize common email field names just in case
     email = doc.get("email") or doc.get("user_email") or doc.get("mail")
     return str(email).strip().lower() if email else None
 
@@ -215,11 +200,9 @@ async def admin_reinit_histories(
 ):
     uid = str(_user.get("user_uid") or "").strip()
     email = await _get_email_by_uid(uid)
-    # ---- admin check (email) ----
     if email != "doubek.evan@gmail.com":
         raise HTTPException(status_code=403, detail="Admin only")
 
-    # ---- choose symbol lists per market ----
     todo: list[tuple[str, list[str]]] = []
 
     if market in ("all", "stock"):
@@ -234,7 +217,6 @@ async def admin_reinit_histories(
         forex_list = [s.upper() for s in (symbols if (symbols and market != "all") else FOREX_SYMBOLS)]
         todo.append(("forex", forex_list))
 
-    # ---- optional: purge existing docs when force=True ----
     async def _purge(mkt: str, syms: List[str]) -> int:
         if not syms:
             return 0
@@ -247,7 +229,6 @@ async def admin_reinit_histories(
             res = await asyncio.to_thread(forex_histories_collection.delete_many, filt)
         else:
             return 0
-        # some drivers use res.deleted_count; guard just in case
         return int(getattr(res, "deleted_count", 0))
 
     purged_summary = {}
@@ -256,7 +237,6 @@ async def admin_reinit_histories(
             purged = await _purge(mkt, syms)
             purged_summary[mkt] = purged
 
-    # ---- run ensures (with a small concurrency guard) ----
     sem = asyncio.Semaphore(8)
 
     async def _guarded(coro):
@@ -295,11 +275,7 @@ async def get_market_status(
     market: Optional[str] = Query(None, description="stock | crypto | forex"),
     _user = Depends(get_current_user_from_api_key),
 ):
-    """
-    Returns {"isOpen": bool} for the given symbol or market.
-    - If `symbol` is provided, infer market from your symbol lists (symbol wins if both given).
-    - Otherwise, use `market` directly (expects: stock | crypto | forex, case-insensitive).
-    """
+
     resolved_market = None
 
     if symbol:
@@ -320,12 +296,11 @@ async def get_market_status(
             raise HTTPException(status_code=400, detail="market must be one of: stock | crypto | forex")
         resolved_market = m
 
-    # Compute open/closed
     if resolved_market == "stock":
         status = await is_market_open()
         return {"isOpen": bool(status.get("isOpen", False))}
     elif resolved_market == "forex":
         status = await get_forex_market_status()
         return {"isOpen": bool(status.get("isOpen", False))}
-    else:  # crypto
+    else:
         return {"isOpen": True}

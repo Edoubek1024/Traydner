@@ -19,9 +19,7 @@ def get_api_key(i):
   return FINNHUB_API_KEYS[i % len(FINNHUB_API_KEYS)]
 
 async def fetch_prices(max_concurrency: int = 3) -> list[dict]:
-    """
-    Fetch quotes with up to `max_concurrency` in-flight requests.
-    """
+
     sem = asyncio.Semaphore(max_concurrency)
     timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
     limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
@@ -30,7 +28,7 @@ async def fetch_prices(max_concurrency: int = 3) -> list[dict]:
         async def one(i: int, symbol: str):
             api_key = get_api_key(i)
             url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={api_key}"
-            async with sem:                       # <= cap concurrency at 3
+            async with sem:
                 return await fetch_finnhub_price(symbol, client, url)
 
         tasks = [one(i, s) for i, s in enumerate(STOCK_SYMBOLS)]

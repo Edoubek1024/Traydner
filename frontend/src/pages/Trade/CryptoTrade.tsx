@@ -5,6 +5,7 @@ import { onIdTokenChanged } from "firebase/auth";
 import { CryptoBalances, CryptoHistory, fetchCryptoBalances, fetchCryptoHistoryDb, fetchCryptoPrice } from "../../api/crypto";
 import HistoryChart from "../../components/Charts/HistoryChart";
 import ConfirmTradeModal from "../../components/Modals/ConfirmTradeModal"
+import { checkBackendHealth } from "../../config/probe";
 
 type RangeKey = "1D" | "1W" | "1M" | "3M" | "YTD" | "1Y" | "5Y";
 
@@ -36,6 +37,25 @@ const CryptoTrade = () => {
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [backendDown, setBackendDown] = useState<boolean | null>(null);
+  
+  useEffect(() => {
+    let cancelled = false;
+  
+    async function check() {
+      const ok = await checkBackendHealth();
+      if (!cancelled) setBackendDown(!ok);
+    }
+  
+    check();
+  
+    const interval = setInterval(check, 30_000);
+  
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     const unsub = onIdTokenChanged(auth, async (user) => {
@@ -335,214 +355,242 @@ const CryptoTrade = () => {
     </button>
   );
 
-  return (
-    <div className="min-h-screen bg-gray-900 p-6">
-      <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">Cryptocurrency Trading Dashboard</h1>
+  let content: React.ReactNode;
+
+  if (backendDown === null) {
+    content = (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500" />
+      </div>
+    );
+  } else if (backendDown === true) {
+    content = (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="bg-gray-800 border border-yellow-700 rounded-lg p-8 text-center">
+          <h1 className="text-2xl font-bold text-white mb-2">
+            Backend services are temporarily down
+          </h1>
+          <p className="text-gray-400">
+            Please try again later or contact an admin for further assistance.
+          </p>
         </div>
-
-        {/* Crypto Selector */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-white mb-2">
-            Select Crypto
-          </label>
-          <select 
-            value={selectedSymbol} 
-            onChange={(e) => setSelectedSymbol(e.target.value)}
-            className="w-72 px-3 py-2 border border-yellow-600 rounded-md bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-          >
-            {symbols.map((symbol) => (
-              <option key={symbol} value={symbol}>
-                {symbol} - {getCryptoDisplayName(symbol)}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Buy/Sell Section */}
-        <div className="mb-6 bg-gray-800 rounded-lg border border-yellow-700 p-6">
-          <h2 className="text-xl font-semibold text-white mb-4">
-            Trade {selectedSymbol} - {getCryptoDisplayName(selectedSymbol)}
-          </h2>
-
-          {/* Balances */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-            <div className="bg-gray-700 border border-yellow-600 rounded-md p-3">
-              <p className="text-xs text-gray-300">Cash</p>
-              <p className="text-lg text-white font-semibold">
-                {balances
-                  ? `$${balances.cash.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2
-                    })}`
-                  : "—"}
-              </p>
+      </div>
+    );
+  } else {
+    content = (
+      <>
+        <div className="min-h-screen bg-gray-900 p-6">
+          <div className="max-w-6xl mx-auto">
+            {/* Header */}
+            <div className="mb-8">
+              <h1 className="text-4xl font-bold text-white mb-2">Cryptocurrency Trading Dashboard</h1>
             </div>
-            <div className="bg-gray-700 border border-yellow-600 rounded-md p-3">
-              <p className="text-xs text-gray-300">
-                Holdings
-              </p>
-              <p className="text-lg text-white font-semibold">
-                {balances ? (
-                  <>
-                    {fmtQty(holdingQty)} {selectedSymbol} (
-                    {selectedPrice ? `$${fmtUsd(holdingVal)}` : "—"})
-                  </>
-                ) : "—"}
-              </p>
-            </div>
-          </div>
-          <h3 className="text-lg font-semibold text-white mb-3">
-            Place Order
-          </h3>
-          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-            {/* Price (read-only for now) */}
-            <div>
-              <label className="block text-sm font-medium text-white mb-1">
-                Price
+
+            {/* Crypto Selector */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-white mb-2">
+                Select Crypto
               </label>
-              <input
-                type="text"
-                readOnly
-                value={
-                  selectedPrice != null
-                    ? selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 8 })
-                    : ""
-                }
-                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-              />
-            </div>
-
-            {/* Action: Buy/Sell */}
-            <div>
-              <label className="block text-sm font-medium text-white mb-1">
-                Action
-              </label>
-              <select
-                value={tradeAction}
-                onChange={(e) => setTradeAction(e.target.value as "buy" | "sell")}
-                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+              <select 
+                value={selectedSymbol} 
+                onChange={(e) => setSelectedSymbol(e.target.value)}
+                className="w-72 px-3 py-2 border border-yellow-600 rounded-md bg-gray-800 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
               >
-                <option value="buy">Buy</option>
-                <option value="sell">Sell</option>
+                {symbols.map((symbol) => (
+                  <option key={symbol} value={symbol}>
+                    {symbol} - {getCryptoDisplayName(symbol)}
+                  </option>
+                ))}
               </select>
             </div>
 
-            {/* Quantity */}
-            <div>
-              <label className="block text-sm font-medium text-white mb-1">
-                Quantity ({selectedSymbol})
-              </label>
-              <input
-                type="number"
-                inputMode="decimal"
-                step={qtyStep}
-                min="0"
-                value={Number.isNaN(quantity) ? "" : quantity}
-                onChange={(e) => {
-                  const val = parseFloat(e.target.value);
-                  setQuantity(val);
-                }}
-                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent placeholder-gray-400"
-                placeholder={`Amount of ${selectedSymbol}`}
-              />
-            </div>
+            {/* Buy/Sell Section */}
+            <div className="mb-6 bg-gray-800 rounded-lg border border-yellow-700 p-6">
+              <h2 className="text-xl font-semibold text-white mb-4">
+                Trade {selectedSymbol} - {getCryptoDisplayName(selectedSymbol)}
+              </h2>
 
-            {/* Total Cost */}
-            <div>
-              <label className="block text-sm font-medium text-white mb-1">
-                Total Cost
-              </label>
-              <input
-                type="text"
-                readOnly
-                value={
-                  selectedPrice && quantity > 0
-                    ? (selectedPrice * quantity).toLocaleString(undefined, { maximumFractionDigits: 8 })
-                    : "N/A"
-                }
-                className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-              />
-            </div>
-
-            {/* Submit Button */}
-            <div>
-              <button
-                type="submit"
-                className={"w-full font-medium py-2 px-4 rounded-md transition bg-yellow-600 text-white hover:bg-yellow-700"}
-              >
-                Submit Order
-              </button>
-            </div>
-
-            {error && (
-              <div className="md:col-span-5 text-red-400 bg-red-900 border border-red-700 rounded-md p-3 mb-2">
-                {error}
+              {/* Balances */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                <div className="bg-gray-700 border border-yellow-600 rounded-md p-3">
+                  <p className="text-xs text-gray-300">Cash</p>
+                  <p className="text-lg text-white font-semibold">
+                    {balances
+                      ? `$${balances.cash.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2
+                        })}`
+                      : "—"}
+                  </p>
+                </div>
+                <div className="bg-gray-700 border border-yellow-600 rounded-md p-3">
+                  <p className="text-xs text-gray-300">
+                    Holdings
+                  </p>
+                  <p className="text-lg text-white font-semibold">
+                    {balances ? (
+                      <>
+                        {fmtQty(holdingQty)} {selectedSymbol} (
+                        {selectedPrice ? `$${fmtUsd(holdingVal)}` : "—"})
+                      </>
+                    ) : "—"}
+                  </p>
+                </div>
               </div>
-            )}
-            {successMessage && (
-              <div className="md:col-span-5 text-green-500 bg-green-900 border border-green-700 rounded-md p-3 mb-2">
-                {successMessage}
+              <h3 className="text-lg font-semibold text-white mb-3">
+                Place Order
+              </h3>
+              <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+                {/* Price (read-only for now) */}
+                <div>
+                  <label className="block text-sm font-medium text-white mb-1">
+                    Price
+                  </label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={
+                      selectedPrice != null
+                        ? selectedPrice.toLocaleString(undefined, { maximumFractionDigits: 8 })
+                        : ""
+                    }
+                    className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                  />
+                </div>
+
+                {/* Action: Buy/Sell */}
+                <div>
+                  <label className="block text-sm font-medium text-white mb-1">
+                    Action
+                  </label>
+                  <select
+                    value={tradeAction}
+                    onChange={(e) => setTradeAction(e.target.value as "buy" | "sell")}
+                    className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                  >
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                  </select>
+                </div>
+
+                {/* Quantity */}
+                <div>
+                  <label className="block text-sm font-medium text-white mb-1">
+                    Quantity ({selectedSymbol})
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={qtyStep}
+                    min="0"
+                    value={Number.isNaN(quantity) ? "" : quantity}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      setQuantity(val);
+                    }}
+                    className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent placeholder-gray-400"
+                    placeholder={`Amount of ${selectedSymbol}`}
+                  />
+                </div>
+
+                {/* Total Cost */}
+                <div>
+                  <label className="block text-sm font-medium text-white mb-1">
+                    Total Cost
+                  </label>
+                  <input
+                    type="text"
+                    readOnly
+                    value={
+                      selectedPrice && quantity > 0
+                        ? (selectedPrice * quantity).toLocaleString(undefined, { maximumFractionDigits: 8 })
+                        : "N/A"
+                    }
+                    className="w-full px-3 py-2 border border-yellow-600 rounded-md bg-gray-600 text-gray-300 cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                  />
+                </div>
+
+                {/* Submit Button */}
+                <div>
+                  <button
+                    type="submit"
+                    className={"w-full font-medium py-2 px-4 rounded-md transition bg-yellow-600 text-white hover:bg-yellow-700"}
+                  >
+                    Submit Order
+                  </button>
+                </div>
+
+                {error && (
+                  <div className="md:col-span-5 text-red-400 bg-red-900 border border-red-700 rounded-md p-3 mb-2">
+                    {error}
+                  </div>
+                )}
+                {successMessage && (
+                  <div className="md:col-span-5 text-green-500 bg-green-900 border border-green-700 rounded-md p-3 mb-2">
+                    {successMessage}
+                  </div>
+                )}
+              </form>
+            </div>
+
+            <ConfirmTradeModal
+              open={confirmOpen}
+              action={tradeAction}
+              symbol={selectedSymbol}
+              quantity={Number.isNaN(quantity) ? 0 : quantity}
+              price={prices[selectedSymbol]}
+              confirming={confirming}
+              onCancel={() => setConfirmOpen(false)}
+              onConfirm={placeOrder}
+            />
+
+            {/* Main Chart */}
+            <div className="bg-gray-800 rounded-lg border border-yellow-700 p-6">
+              <div className="flex flex-wrap gap-2 mb-4">
+                <RangeButton value="1D" label="1 day" />
+                <RangeButton value="1W" label="1 week" />
+                <RangeButton value="1M" label="1 month" />
+                <RangeButton value="3M" label="3 months" />
+                <RangeButton value="YTD" label="YTD" />
+                <RangeButton value="1Y" label="1 year" />
+                <RangeButton value="5Y" label="5 years" />
               </div>
-            )}
-          </form>
-        </div>
-
-        <ConfirmTradeModal
-          open={confirmOpen}
-          action={tradeAction}
-          symbol={selectedSymbol}
-          quantity={Number.isNaN(quantity) ? 0 : quantity}
-          price={prices[selectedSymbol]}
-          confirming={confirming}
-          onCancel={() => setConfirmOpen(false)}
-          onConfirm={placeOrder}
-        />
-
-        {/* Main Chart */}
-        <div className="bg-gray-800 rounded-lg border border-yellow-700 p-6">
-          <div className="flex flex-wrap gap-2 mb-4">
-            <RangeButton value="1D" label="1 day" />
-            <RangeButton value="1W" label="1 week" />
-            <RangeButton value="1M" label="1 month" />
-            <RangeButton value="3M" label="3 months" />
-            <RangeButton value="YTD" label="YTD" />
-            <RangeButton value="1Y" label="1 year" />
-            <RangeButton value="5Y" label="5 years" />
+              {loading ? (
+                <div className="flex items-center justify-center h-96">
+                  <div className="text-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mx-auto mb-4"></div>
+                    <p className="text-gray-400">Loading prices...</p>
+                  </div>
+                </div>
+              ) : historyLoading ? (
+                <div className="flex items-center justify-center h-96">
+                  <div className="text-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mx-auto mb-4"></div>
+                    <p className="text-gray-400">Loading {selectedSymbol} history...</p>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <HistoryChart
+                    symbol={selectedSymbol}
+                    price={prices[selectedSymbol]}
+                    candles={history[`${selectedSymbol}|${range}`]?.history ?? []}
+                    yLabel="Price"
+                    color="#e0d700"
+                    fill="rgba(240,215,0,0.2)"
+                    decimals={2}
+                  />
+                </div>
+              )}
+            </div>
           </div>
-          {loading ? (
-            <div className="flex items-center justify-center h-96">
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mx-auto mb-4"></div>
-                <p className="text-gray-400">Loading prices...</p>
-              </div>
-            </div>
-          ) : historyLoading ? (
-            <div className="flex items-center justify-center h-96">
-              <div className="text-center">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-yellow-500 mx-auto mb-4"></div>
-                <p className="text-gray-400">Loading {selectedSymbol} history...</p>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <HistoryChart
-                symbol={selectedSymbol}
-                price={prices[selectedSymbol]}
-                candles={history[`${selectedSymbol}|${range}`]?.history ?? []}
-                yLabel="Price"
-                color="#e0d700"
-                fill="rgba(240,215,0,0.2)"
-                decimals={2}
-              />
-            </div>
-          )}
         </div>
-      </div>
-    </div>
-  );
+      </>
+    );
+  }
+
+  return <>{content}</>;
+
 };
 
 export default CryptoTrade;

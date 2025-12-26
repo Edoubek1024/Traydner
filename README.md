@@ -6,7 +6,7 @@ Traydner is a full-stack trading practice platform that helps users learn and te
 
 Users begin with $100,000 in simulated cash and can trade across stocks, cryptocurrencies, and forex markets using real-time pricing data. Through the Traydner web interface, users place paper trades, track portfolio performance, and refine strategies over time. For advanced workflows, Traydner also provides a personal API key, allowing users to programmatically execute simulated trades directly against their own paper wallet making it easy to test automated strategies and algorithmic trading systems in a safe, controlled environment.
 
-- <a href="https://www.traydner.com/" target="_blank" rel="noopener noreferrer">Preview</a>
+- <a href="https://www.traydner.com/" target="_blank" rel="noopener noreferrer">Preview</a> (Backend services may not always be online)
 - [Backend](https://github.com/Edoubek1024/Traydner?tab=readme-ov-file#complete-backend-overview)
 - [Frontend](https://github.com/Edoubek1024/Traydner?tab=readme-ov-file#complete-frontend-overview)
 
